@@ -55,6 +55,7 @@ def _parse_args():
     parser.add_argument("--mean-exchange", type=str, default="balanced_sbp2_pc")
     parser.add_argument("--sbp-substeps", type=int, default=4)
     parser.add_argument("--w-bc-top", choices=["dirichlet", "neumann"], default="dirichlet")
+    parser.add_argument("--imex-scheme", choices=["ars222", "rk443"], default="ars222")
     parser.add_argument("--advection", choices=["flux", "jacobian"], default="flux")
     parser.add_argument("--dealias", choices=["23_rule", "32_rule"], default="23_rule")
     parser.add_argument("--imex-matmul-chunk", type=int, default=0)
@@ -202,7 +203,7 @@ def main():
         drag=args.drag,
         imex_matmul_chunk=args.imex_matmul_chunk,
         q_boundary="none",
-        imex_scheme="ars222",
+        imex_scheme=args.imex_scheme,
         output_dir=args.output_dir,
     )
     output_dir = Path(args.output_dir)
