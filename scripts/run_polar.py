@@ -58,6 +58,9 @@ def _parse_args():
     parser.add_argument("--advection", choices=["flux", "jacobian"], default="flux")
     parser.add_argument("--dealias", choices=["23_rule", "32_rule"], default="23_rule")
     parser.add_argument("--imex-matmul-chunk", type=int, default=0)
+    parser.add_argument("--shard-axis", choices=["none", "z", "kx"], default="none")
+    parser.add_argument("--shard-devices", type=int, default=None,
+                        help="number of devices for --shard-axis (default: all visible)")
     parser.add_argument("--output-dir", required=True, type=str)
     parser.add_argument("--snapshot-interval", type=float, default=0.25)
     parser.add_argument("--checkpoint-interval", type=float, default=1.0)
@@ -214,6 +217,12 @@ def main():
             state = make_initial_state(grid, seed=args.seed, amplitude=args.init_amplitude)
         else:
             state = _make_barotropic_vorticity_state(args, grid, L)
+
+    if args.shard_axis != "none":
+        from nhqg.sharding import make_mesh, shard_state
+        mesh = make_mesh(args.shard_devices)
+        print(f"sharding state axis={args.shard_axis} over {len(mesh.devices.ravel())} devices")
+        state = shard_state(state, mesh, args.shard_axis)
 
     n_total = int(round(args.t_final / args.dt))
     if step0 >= n_total:

@@ -103,16 +103,41 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
 
 ## M3 — 2-GPU sharding (after M0; re-bench after M2 lands)
 
-- [ ] Mesh + NamedSharding wiring behind a config flag (`shard_axis: none|z|kx`);
-      `with_sharding_constraint` at spectral/physical phase boundaries.
-- [ ] Measure axis-0 vs axis-1 (vs two-phase if needed) at 256²×64. [GPU 6/7]
-- [ ] **Gates**: 1-vs-2 GPU trajectory match (1e-12 state norms, 200 steps,
-      128²×64); ≥1.6× steps/s at 512²×64; balanced util on 6/7 only.
+- [x] Wiring (2026-07-22, lead): `nhqg/sharding.py` (mesh, per-field
+      NamedShardings, `shard_state`); driver flags `--shard-axis`/
+      `--shard-devices` (flag lives at driver level, not NHQGConfig —
+      execution concern, checkpoints stay layout-agnostic). No explicit
+      `with_sharding_constraint` yet — pure GSPMD propagation first;
+      constraints only if the GPU profile shows resharding.
+      **FINDINGS**: (i) kx (axis 1) is the ONLY shardable state axis on 2
+      devices — Nz±1 and Nk are odd and JAX 0.10 rejects uneven splits
+      (IndivisibleError); 'z' needs a padded layout if ever wanted.
+      (ii) XLA's CPU backend cannot run a partitioned FFT over the sharded
+      axis (fft_thunk layout RET_CHECK) → full-step equivalence is GPU-only.
+- [x] CPU gates (2026-07-22, `tests/test_sharding.py`, 3 passed): kx wiring
+      + local shard shapes; z-rejection documented; sharded IMEX implicit
+      solve (per-shell gather/matmul core) matches unsharded to 1e-13.
+- [ ] **GPU gate** (written, auto-skips off-GPU): full-step 1-vs-2 GPU
+      trajectory match <1e-12, 50 steps — run
+      `CUDA_VISIBLE_DEVICES=6,7 pytest tests/test_sharding.py -k GPU`
+      when the P0 chain drains. Then 200-step match at 128²×64.
+- [ ] Measure kx-sharding speedup at 256²×64, then ≥1.6× steps/s gate at
+      512²×64; balanced util on 6/7 only. [GPU 6/7]
 - [ ] Checkpoint path: verify `jax.device_get` on sharded state → io.py npz
       unchanged; restart cross-compatible between 1- and 2-GPU.
 
 ## M4 — 512²×64 shakedown
 
+- [~] **Open-top full-physics pilot LAUNCHED** (2026-07-22, GPU6, lead):
+      512²×64, L=48Lc, Ra=100, γ=0, `w_bc_top=neumann` + `evolve_mean` +
+      balanced_sbp2_pc+sub4 + flux + 23_rule, ν=1 Laplacian, dt=5e-5,
+      t_final=10 (M4 pilot gate; doubles as the M5 γ-calibration spin-up —
+      measure barotropic U_rms at saturation). `--w-bc-top` added to driver
+      (`f184c18`; CPU smoke of neumann+evolve_mean via driver passed).
+      `output/polar_m4_pilot_opentop_evolvemean_Nx512_Nz64_L48_Ra100_dt5e5`.
+      P0 rearranged to free GPU6: γ=0.005 killed at t≈435, CSV truncated to
+      t=400, continuation from `checkpoint_00040000.npz` queued on GPU7
+      behind g0.02→g0.08 via a pgrep watcher.
 - [ ] dt stability scan at L=48 Lc (start 5e-5; CFL vs dx=0.45 units).
 - [x] Diagnostics cadence + non-finite abort: built into `scripts/run_polar.py`
       (2026-07-22; aborts with exit 2 + emergency checkpoint; structural-NaN
