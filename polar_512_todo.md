@@ -7,22 +7,32 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
 
 ## M0 — Hygiene prerequisites
 
-- [~] **P0.3 git**: `.gitignore` (output/ ~310 GB, derived_checkpoints/, logs,
-      PDFs, aux), initial commit of code+docs. Do FIRST so refactors are tracked.
-- [ ] **P0.1 ghost fix**: Hermitian-symmetrize ky=0 + ky-Nyquist rfft2 columns
-      each step; Hermitian-project initial noise and checkpoint loads;
-      regression test (anti-Hermitian seed must die, Hermitian state unchanged
-      to roundoff). See `hermitian_ghost.md`.
-- [ ] **P0.2 init/restart mask**: under `23_rule`, mask state to the retained
-      band at init, checkpoint load, and finalize (currently output-only).
-      Test: restart of a masked state is bit-compatible.
-- [ ] **P0.4a q_solve lever**: `q_boundary='none'` → use scalar `inv_alpha_q`,
-      drop dense per-shell identity q_solve matrices. (codex-able; CPU tests)
-- [ ] **P0.4b gather lever**: stop materializing `mat_shells[ksq_idx]`
-      (4.4 GB at 512²×64) — chunked `lax.map`/scan over kx or segment-sum.
-      CPU correctness test codex-able; VRAM gate (peak < 10 GB at 256²×64) lead.
-- [ ] **M0 gate**: full test suite green; 64×256 short-run trajectory match
-      vs pre-M0 code (ghost projection ON changes only ghost content).
+- [x] **P0.3 git** (2026-07-22): `.gitignore`, baseline commit `59d8aa3` on
+      `main` (259 files); M0 work on branch `m0-hygiene`.
+- [x] **P0.1 ghost fix** (2026-07-22, `488fd78`): `sanitize_state()` —
+      Hermitian projection of ky=0 + ky-Nyquist columns at every step, at
+      `run()` entry, at init (noise was non-Hermitian = the ghost seed), and
+      numpy-side in `load_checkpoint`. 4 regression tests. NOTE: ghost content
+      in the kx-Nyquist row is NOT invisible under the 3/2 pad (asymmetric
+      ±Nyquist treatment) — documented in the test.
+- [x] **P0.2 state band-limit** (2026-07-22, `488fd78`): under `23_rule` the
+      masked band is zeroed **every step** (stronger than init/restart-only),
+      killing the frozen-band pathology class entirely.
+- [x] **P0.4a q_solve lever** (2026-07-22, `471a404`): `q_boundary='none'` →
+      scalar `inv_alpha_q`; dense per-shell identities no longer built/stored/
+      gathered (`grid.q_solve is None`).
+- [~] **P0.4b gather lever** (2026-07-22, `471a404`): `imex_matmul_chunk`
+      config — chunked `lax.map` over kx rows caps the gather transient;
+      CPU-verified identical (both q_boundary modes, non-dividing chunk).
+      **Pending: GPU VRAM gate** (peak < 10 GB at 256²×64, GPUs 6/7) — run
+      with the M3 benchmarking session; also pick the production chunk size.
+- [x] **M0 gate** (2026-07-22): 97 tests green + sanitized-start equivalence:
+      pre-M0 vs post-M0 trajectories **bitwise identical** (60 steps,
+      production-flavor 32²×32 balanced_sbp2_pc+sub4+flux+23_rule).
+      FINDING: from an *unsanitized* start, pre-M0 in-band q differs at
+      2×10⁻⁷ relative after only 60 steps — out-of-band state content
+      genuinely contaminated in-band physics through the products; historical
+      23_rule runs carried this at their noise level.
 
 ## M1 — Trap (γ-effect) [independent of M2]
 
