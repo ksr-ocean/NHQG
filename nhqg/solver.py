@@ -99,6 +99,52 @@ def zero_mean(f_hat: jnp.ndarray) -> jnp.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# State sanitization: Hermitian reality constraint + 2/3-rule band limit
+# ---------------------------------------------------------------------------
+
+def hermitian_project(f_hat: jnp.ndarray, Nx: int) -> jnp.ndarray:
+    """Enforce the rfft2 reality constraint f(-kx, ky=0) = conj(f(kx, ky=0)).
+
+    The ky=0 (and, for even Nx, ky-Nyquist) columns of an rfft2 field store
+    both kx signs redundantly. Anti-Hermitian content there is invisible to
+    irfft2 physics but is amplified at the unsaturated linear growth rate
+    forever (see hermitian_ghost.md), poisoning every Parseval-style
+    diagnostic. Projecting onto the Hermitian part is exact for any state
+    that represents a real field.
+    """
+    neg = (-jnp.arange(Nx)) % Nx
+
+    def sym(col):
+        return 0.5 * (col + jnp.conj(col[:, neg]))
+
+    f_hat = f_hat.at[:, :, 0].set(sym(f_hat[:, :, 0]))
+    if Nx % 2 == 0:
+        f_hat = f_hat.at[:, :, -1].set(sym(f_hat[:, :, -1]))
+    return f_hat
+
+
+def sanitize_state(state: State, grid: Grid) -> State:
+    """Project the evolved state onto its physically meaningful subspace.
+
+    (i) Hermitian reality constraint on the redundant rfft2 columns.
+    (ii) Under 23_rule, zero the masked band: those modes receive no
+    nonlinear tendency (the mask is applied to the products), so any state
+    content there evolves purely linearly -- at Nx=64 part of that band is
+    linearly UNSTABLE and grows frozen and unsaturated. Band-limiting the
+    state each step removes that pathology; under 32_rule the padded
+    products handle dealiasing and the state is legitimately full-band.
+    """
+    q, w, th = state.q_hat, state.w_hat, state.th_hat
+    q = hermitian_project(q, grid.Nx)
+    w = hermitian_project(w, grid.Nx)
+    th = hermitian_project(th, grid.Nx)
+    if grid.horizontal_dealiasing == "23_rule":
+        m = grid.mask_23[None, :, :]
+        q, w, th = q * m, w * m, th * m
+    return State(q, w, th, state.th_bar)
+
+
+# ---------------------------------------------------------------------------
 # Tau BC projection (for explicit steppers)
 # ---------------------------------------------------------------------------
 
@@ -1099,16 +1145,18 @@ def imex_step_balanced_sbp2_pc(state: State, grid: Grid) -> State:
 def imex_step(state: State, grid: Grid) -> State:
     """Dispatch to the configured IMEX-RK stepper."""
     if uses_balanced_midpoint_exchange(grid):
-        return imex_step_balanced_midpoint(state, grid)
-    if uses_balanced_sbp2_pc_exchange(grid):
-        return imex_step_balanced_sbp2_pc(state, grid)
-    if uses_balanced_sbp2_split_exchange(grid):
-        return imex_step_balanced_sbp2(state, grid)
-    if grid.imex_scheme == "ars222":
-        return imex_step_ars222(state, grid)
-    if grid.imex_scheme == "rk443":
-        return imex_step_rk443(state, grid)
-    raise ValueError(f"Unsupported imex_scheme={grid.imex_scheme!r}")
+        new = imex_step_balanced_midpoint(state, grid)
+    elif uses_balanced_sbp2_pc_exchange(grid):
+        new = imex_step_balanced_sbp2_pc(state, grid)
+    elif uses_balanced_sbp2_split_exchange(grid):
+        new = imex_step_balanced_sbp2(state, grid)
+    elif grid.imex_scheme == "ars222":
+        new = imex_step_ars222(state, grid)
+    elif grid.imex_scheme == "rk443":
+        new = imex_step_rk443(state, grid)
+    else:
+        raise ValueError(f"Unsupported imex_scheme={grid.imex_scheme!r}")
+    return sanitize_state(new, grid)
 
 
 # ---------------------------------------------------------------------------
@@ -1202,7 +1250,7 @@ def rk4_step(state: State, grid: Grid) -> State:
     th_bar_new = project_dirichlet_1d(th_bar_new, grid.proj_dirichlet)
 
     state_new = _apply_vertical_cutoff(State(q_new, w_new, th_new, th_bar_new), grid)
-    return State(state_new.q_hat, state_new.w_hat, state_new.th_hat, state_new.th_bar)
+    return sanitize_state(state_new, grid)
 
 
 # ---------------------------------------------------------------------------
@@ -1242,7 +1290,9 @@ def make_initial_state(grid: Grid, seed: int = 0,
     th_hat = jnp.zeros(gal_shape, dtype=q_hat.dtype)
     th_bar = jnp.zeros(Nz1, dtype=grid.Z.dtype)
 
-    return State(q_hat, w_hat, th_hat, th_bar)
+    # Random complex noise is not Hermitian in the redundant rfft2 columns --
+    # without this projection the initial condition seeds the ghost mode.
+    return sanitize_state(State(q_hat, w_hat, th_hat, th_bar), grid)
 
 
 # ---------------------------------------------------------------------------
@@ -1254,6 +1304,10 @@ def run(grid: Grid, state: State, n_steps: int,
         callback=None) -> tuple[State, list]:
     """Run the solver for n_steps time steps."""
     stepper = imex_step if use_imex else rk4_step
+
+    # Cover every entry path (fresh init, restart, hand-built states): the
+    # steppers keep the state sanitized, but the incoming state may not be.
+    state = sanitize_state(state, grid)
 
     @jax.jit
     def scan_body(state, _):

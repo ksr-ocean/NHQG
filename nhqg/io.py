@@ -131,9 +131,26 @@ def load_checkpoint(path: str, dtype=jnp.complex128) -> tuple[State, int, float]
     Returns: (state, step, t)
     """
     data = np.load(path)
-    q_hat = jnp.array(data['q_hat_real'] + 1j * data['q_hat_imag'], dtype=dtype)
-    w_hat = jnp.array(data['w_hat_real'] + 1j * data['w_hat_imag'], dtype=dtype)
-    th_hat = jnp.array(data['th_hat_real'] + 1j * data['th_hat_imag'], dtype=dtype)
+
+    def _hermitian_project_np(f):
+        # Enforce the rfft2 reality constraint on the redundant ky=0 and
+        # ky-Nyquist columns. Historical checkpoints carry an anti-Hermitian
+        # ghost there (see hermitian_ghost.md); config-free and exact for any
+        # state representing a real field, so always safe to apply on load.
+        Nx = f.shape[1]
+        neg = (-np.arange(Nx)) % Nx
+        f = np.array(f)
+        f[:, :, 0] = 0.5 * (f[:, :, 0] + np.conj(f[:, neg, 0]))
+        if Nx % 2 == 0:
+            f[:, :, -1] = 0.5 * (f[:, :, -1] + np.conj(f[:, neg, -1]))
+        return f
+
+    q_hat = jnp.array(_hermitian_project_np(
+        data['q_hat_real'] + 1j * data['q_hat_imag']), dtype=dtype)
+    w_hat = jnp.array(_hermitian_project_np(
+        data['w_hat_real'] + 1j * data['w_hat_imag']), dtype=dtype)
+    th_hat = jnp.array(_hermitian_project_np(
+        data['th_hat_real'] + 1j * data['th_hat_imag']), dtype=dtype)
     if 'th_bar' in data:
         th_bar = jnp.array(data['th_bar'], dtype=q_hat.real.dtype)
     else:

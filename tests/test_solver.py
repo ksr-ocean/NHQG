@@ -800,3 +800,104 @@ class TestMeanExchangeDiagnostics:
         assert bool(jnp.all(jnp.isfinite(state.w_hat)))
         assert bool(jnp.all(jnp.isfinite(state.th_hat)))
         assert bool(jnp.all(jnp.isfinite(state.th_bar)))
+
+
+# ---------------------------------------------------------------------------
+# Hermitian ghost regression (hermitian_ghost.md)
+# ---------------------------------------------------------------------------
+
+class TestHermitianGhost:
+    """The rfft2 ky=0 / ky-Nyquist columns must stay Hermitian.
+
+    Anti-Hermitian content there ("the ghost") is invisible to irfft2-based
+    physics but grows at the unsaturated linear rate forever. The solver must
+    (a) never seed it, (b) remove it every step, and (c) be physically
+    unaffected by its removal.
+    """
+
+    def _cfg(self, **kw):
+        base = dict(Nx=16, Nz=8, L=20.0, Ra_tilde=50.0, sigma=1.0,
+                    beta=0.0, Ld=float('inf'), dt=1e-4, float_dtype='float64')
+        base.update(kw)
+        return NHQGConfig(**base)
+
+    @staticmethod
+    def _anti_hermitian_residual(f_hat, Nx):
+        neg = (-np.arange(Nx)) % Nx
+        res = 0.0
+        for col in (0, -1):
+            a = np.array(f_hat[:, :, col])
+            res = max(res, float(np.max(np.abs(a - np.conj(a[:, neg])))))
+        return res
+
+    @staticmethod
+    def _inject_ghost(state, Nx, amp=1e-3, seed=99):
+        """Add pure anti-Hermitian content to the ky=0 column.
+
+        kx=0 is excluded (k=(0,0) hygiene) and so is the kx-Nyquist row:
+        under the 3/2-rule pad the +/-Nyquist rows are treated
+        asymmetrically, so Nyquist-row ghost content is NOT exactly
+        invisible to the padded product path (the known 32_rule Nyquist
+        self-aliasing). sanitize_state removes it each step regardless.
+        """
+        rng = np.random.default_rng(seed)
+        neg = (-np.arange(Nx)) % Nx
+
+        def poison(f_hat):
+            f = np.array(f_hat)
+            r = rng.normal(size=f[:, :, 0].shape) + 1j * rng.normal(size=f[:, :, 0].shape)
+            g = 0.5 * (r - np.conj(r[:, neg]))   # exactly anti-Hermitian
+            g[:, 0] = 0.0                        # keep the k=(0,0) mode clean
+            g[:, Nx // 2] = 0.0                  # exclude the kx-Nyquist row
+            f[:, :, 0] += amp * g
+            return jnp.array(f)
+
+        return State(poison(state.q_hat), poison(state.w_hat),
+                     poison(state.th_hat), state.th_bar)
+
+    def test_initial_state_is_hermitian(self):
+        g = make_grid(self._cfg())
+        state = make_initial_state(g, seed=3, amplitude=1e-3)
+        assert self._anti_hermitian_residual(state.q_hat, g.Nx) < 1e-15
+
+    def test_step_removes_injected_ghost(self):
+        g = make_grid(self._cfg())
+        state = make_initial_state(g, seed=3, amplitude=1e-3)
+        for _ in range(5):
+            state = imex_step(state, g)
+        ghosted = self._inject_ghost(state, g.Nx)
+        assert self._anti_hermitian_residual(ghosted.q_hat, g.Nx) > 1e-4
+        stepped = imex_step(ghosted, g)
+        for f in (stepped.q_hat, stepped.w_hat, stepped.th_hat):
+            assert self._anti_hermitian_residual(f, g.Nx) < 1e-14
+
+    def test_ghost_is_physically_invisible(self):
+        """Clean and ghost-injected states must coincide after one step:
+        the ghost feeds no physics and the projection removes it exactly."""
+        g = make_grid(self._cfg(thermal_closure='evolve_mean'))
+        state = make_initial_state(g, seed=3, amplitude=1e-3)
+        for _ in range(5):
+            state = imex_step(state, g)
+        clean = imex_step(state, g)
+        poisoned = imex_step(self._inject_ghost(state, g.Nx), g)
+        scale = float(jnp.max(jnp.abs(clean.q_hat)))
+        assert float(jnp.max(jnp.abs(clean.q_hat - poisoned.q_hat))) < 1e-12 * scale
+        assert float(jnp.max(jnp.abs(clean.w_hat - poisoned.w_hat))) < 1e-12
+        assert float(jnp.max(jnp.abs(clean.th_hat - poisoned.th_hat))) < 1e-12
+        assert float(jnp.max(jnp.abs(clean.th_bar - poisoned.th_bar))) < 1e-12
+
+    def test_state_band_limited_under_23_rule(self):
+        """Under 23_rule the masked band must carry no state content: it is
+        nonlinearly frozen (mask is applied to products), so at some (Nx, L)
+        it contains linearly unstable modes that would grow unsaturated."""
+        g = make_grid(self._cfg(horizontal_dealiasing='23_rule'))
+        state = make_initial_state(g, seed=3, amplitude=1e-3)
+        mask = np.array(g.mask_23)
+        assert (1.0 - mask).sum() > 0
+        # seed the masked band directly
+        f = np.array(state.q_hat)
+        f += 1e-3 * (1.0 - mask)[None, :, :]
+        stepped = imex_step(State(jnp.array(f), state.w_hat, state.th_hat,
+                                  state.th_bar), g)
+        out_of_band = np.abs(np.array(stepped.q_hat)) * (1.0 - mask)[None, :, :]
+        assert float(out_of_band.max()) == 0.0
