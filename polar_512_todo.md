@@ -65,7 +65,23 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       t_final=1000; γ=0.005 on GPU6, γ=0.02→γ=0.08 chained on GPU7;
       `output/polar_p0_bt_g{γ}_Nx512_Nz8_L48`. CPU smoke of the exact config
       passed first (trap guard OK at production geometry). L_γ ≈ 5.4/3.4/2.1
-      vs trap r* = 52. **Analysis tooling ready** (2026-07-22, codex #2,
+      vs trap r* = 52.
+      **FINDING (2026-07-22): γ=0.08 + ars222 blew up at t=48** (KE grew
+      exponentially from t≈26 while enstrophy decayed; Ra=0 so the continuum
+      system cannot grow KE — numerical). Diagnosis: trap-edge topographic
+      Rossby waves (ω ~ |∇η|_edge·kθ/k², |∇η|_edge ∝ γ·A_d·r*) sit on the
+      imaginary axis where ARS222's explicit stage is weakly unstable
+      (~(ωdt)⁴ amplification/step) → γ² sensitivity: γ=0.02 clean to t=1000,
+      γ=0.08 e-folds in ~30 t.u. Archived in
+      `output/polar_p0_bt_g0.08_*_ars222_blowup`. FIX: rerun γ=0.08 under
+      **rk443** (real imaginary-axis stability interval; SYI22's RK4
+      likewise immune) + `mean_exchange=legacy` (bitwise-identical q to
+      balanced_sbp2_pc for Ra=0 barotropic — verified 0.0; sbp_pc dispatcher
+      is ars222-only). Driver `--imex-scheme` added (`f234db7`). Retry
+      queued detached behind the γ=0.005 continuation on GPU7.
+      CAUTION for M4/M5: the convective campaign at γ~O(0.1)·(calibrated)
+      may face the same edge-wave constraint under ars222 — either rk443
+      for trapped runs or dt set by (ω_edge·dt) ≲ 0.1, not advective CFL. **Analysis tooling ready** (2026-07-22, codex #2,
       verified): `scripts/analyze_polar_p0.py` — crystal_metrics (R_crystal,
       NN spacing via periodic min-image), per-run overlays, log-log slope
       fits vs L_γ; gate = synthetic 19-vortex lattice with exact R/spacing
