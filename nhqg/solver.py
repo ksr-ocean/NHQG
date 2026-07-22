@@ -606,12 +606,46 @@ def implicit_tendency(state: State, grid: Grid) -> State:
 # ---------------------------------------------------------------------------
 
 def _per_shell_matmul(mat_shells: jnp.ndarray, ksq_idx: jnp.ndarray,
-                      field: jnp.ndarray) -> jnp.ndarray:
-    """Apply per-|k|² shell matrices to a spectral field."""
-    mats = mat_shells[ksq_idx]               # (Nx, Nk, Nz+1, Nz+1)
-    f_t = jnp.transpose(field, (1, 2, 0))    # (Nx, Nk, Nz+1)
-    r_t = jnp.einsum('abij,abj->abi', mats, f_t)
+                      field: jnp.ndarray, chunk: int = 0) -> jnp.ndarray:
+    """Apply per-|k|² shell matrices to a spectral field.
+
+    With chunk=0 the shell gather materializes the full (Nx, Nk, m, m)
+    tensor -- at large Nx*Nz that transient dominates peak VRAM (the
+    recorded 114 GB at 64x256; ~4.4 GB per gather at 512²x64). chunk>0
+    processes `chunk` kx rows at a time, capping the transient at
+    chunk*Nk*m² while keeping each matmul large enough for GPU throughput.
+    """
+    f_t = jnp.transpose(field, (1, 2, 0))    # (Nx, Nk, m)
+    Nx = f_t.shape[0]
+    if chunk and 0 < chunk < Nx:
+        n_blocks = -(-Nx // chunk)
+        pad = n_blocks * chunk - Nx
+        f_p = jnp.pad(f_t, ((0, pad), (0, 0), (0, 0)))
+        idx_p = jnp.pad(ksq_idx, ((0, pad), (0, 0)))
+        f_b = f_p.reshape(n_blocks, chunk, *f_p.shape[1:])
+        idx_b = idx_p.reshape(n_blocks, chunk, idx_p.shape[1])
+
+        def block(args):
+            idx, fb = args
+            return jnp.einsum('abij,abj->abi', mat_shells[idx], fb)
+
+        r_t = jax.lax.map(block, (idx_b, f_b)).reshape(-1, *f_t.shape[1:])[:Nx]
+    else:
+        r_t = jnp.einsum('abij,abj->abi', mat_shells[ksq_idx], f_t)
     return jnp.transpose(r_t, (2, 0, 1))
+
+
+def _q_stage_solve(R_q: jnp.ndarray, grid: Grid) -> jnp.ndarray:
+    """Apply the q-stage inverse.
+
+    For q_boundary='none' the operator is diagonal: plain division by
+    alpha_q(k) -- no dense matrices, no shell gather. Only the Neumann tau
+    solve needs the per-shell matrices.
+    """
+    if grid.q_boundary == "none":
+        return R_q * grid.inv_alpha_q[None, :, :]
+    return _per_shell_matmul(grid.q_solve, grid.ksq_idx, R_q,
+                             grid.imex_matmul_chunk)
 
 
 def imex_implicit_solve(R_q: jnp.ndarray, R_w: jnp.ndarray,
@@ -624,11 +658,12 @@ def imex_implicit_solve(R_q: jnp.ndarray, R_w: jnp.ndarray,
     # Step 0: Modified w RHS from buoyancy block-elimination
     R_w_eff = R_w + gamma * dt * grid.Ra_sigma * R_th * grid.inv_alpha_th[None, :, :]
 
-    # Step 1: solve the q stage operator (per-shell)
+    # Step 1: solve the q stage operator (scalar for 'none', per-shell tau
+    # solve for 'neumann')
     Nz = grid.Nz
     if grid.q_boundary == "neumann":
         R_q = R_q.at[Nz - 1].set(0.0).at[Nz].set(0.0)
-    temp = _per_shell_matmul(grid.q_solve, grid.ksq_idx, R_q)
+    temp = _q_stage_solve(R_q, grid)
 
     # Step 2: w RHS = R_w_eff + gamma*dt*c(k)*P_gal[G_Z @ temp]
     d_temp = jnp.einsum('ij,j...->i...', grid.G_Z, temp)
@@ -639,7 +674,8 @@ def imex_implicit_solve(R_q: jnp.ndarray, R_w: jnp.ndarray,
     rhs_w = R_w_eff + gamma * dt * d_temp_gal
 
     # Step 3: Solve A' @ w = rhs_w (per-shell, Galerkin basis)
-    w_new = _per_shell_matmul(grid.imex_inv, grid.ksq_idx, rhs_w)
+    w_new = _per_shell_matmul(grid.imex_inv, grid.ksq_idx, rhs_w,
+                              grid.imex_matmul_chunk)
 
     # Step 4: Back-substitute q = q_solve @ (R_q + gamma*dt*G_Z@w)
     w_cheb = _dirichlet_to_cheb(w_new, grid.dirichlet_stencil)
@@ -647,7 +683,7 @@ def imex_implicit_solve(R_q: jnp.ndarray, R_w: jnp.ndarray,
     combined = R_q + gamma * dt * dw_dZ
     if grid.q_boundary == "neumann":
         combined = combined.at[Nz - 1].set(0.0).at[Nz].set(0.0)
-    q_new = _per_shell_matmul(grid.q_solve, grid.ksq_idx, combined)
+    q_new = _q_stage_solve(combined, grid)
 
     # Step 5: Back-substitute theta = (R_th + gamma*dt*w) / alpha_th
     th_new = (R_th + gamma * dt * w_new) * grid.inv_alpha_th[None, :, :]

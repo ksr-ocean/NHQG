@@ -901,3 +901,41 @@ class TestHermitianGhost:
                                   state.th_bar), g)
         out_of_band = np.abs(np.array(stepped.q_hat)) * (1.0 - mask)[None, :, :]
         assert float(out_of_band.max()) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# IMEX application levers (VRAM): scalar q-solve, chunked shell matmul
+# ---------------------------------------------------------------------------
+
+class TestImexApplicationLevers:
+    """q_boundary='none' must not store dense q matrices, and the chunked
+    per-shell matmul must reproduce the monolithic gather exactly."""
+
+    def _cfg(self, **kw):
+        base = dict(Nx=16, Nz=8, L=20.0, Ra_tilde=50.0, sigma=1.0,
+                    beta=0.0, Ld=float('inf'), dt=1e-4, float_dtype='float64')
+        base.update(kw)
+        return NHQGConfig(**base)
+
+    def test_q_solve_dropped_for_none(self):
+        g = make_grid(self._cfg(q_boundary='none'))
+        assert g.q_solve is None
+
+    def test_q_solve_present_for_neumann(self):
+        g = make_grid(self._cfg(q_boundary='neumann'))
+        assert g.q_solve is not None
+        assert g.q_solve.shape[1:] == (g.Nz + 1, g.Nz + 1)
+
+    @pytest.mark.parametrize("q_boundary", ["none", "neumann"])
+    def test_chunked_matmul_matches_monolithic(self, q_boundary):
+        # chunk=5 does not divide Nx=16, exercising the padded tail block
+        g0 = make_grid(self._cfg(q_boundary=q_boundary))
+        gc = make_grid(self._cfg(q_boundary=q_boundary, imex_matmul_chunk=5))
+        a = make_initial_state(g0, seed=7, amplitude=1e-3)
+        b = a
+        for _ in range(3):
+            a = imex_step(a, g0)
+            b = imex_step(b, gc)
+        for fa, fb in ((a.q_hat, b.q_hat), (a.w_hat, b.w_hat),
+                       (a.th_hat, b.th_hat), (a.th_bar, b.th_bar)):
+            assert float(jnp.max(jnp.abs(fa - fb))) < 1e-14

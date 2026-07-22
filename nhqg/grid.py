@@ -82,7 +82,8 @@ class Grid(NamedTuple):
 
     # IMEX infrastructure (inverses per |k|^2 shell)
     imex_inv: jnp.ndarray     # (n_shells, Nz-1, Nz-1) precomputed A'^{-1} in Dirichlet basis
-    q_solve: jnp.ndarray      # (n_shells, Nz+1, Nz+1) q-stage solve operator
+    q_solve: jnp.ndarray | None  # (n_shells, Nz+1, Nz+1) q-stage tau solve (q_boundary='neumann');
+                                 # None for 'none' -- the solve is the scalar inv_alpha_q
     ksq_idx: jnp.ndarray      # (Nx, Nk) int32, maps (kx,ky) -> shell index
 
     # Tau BC projection matrices (for RK4 / post-step BC enforcement)
@@ -117,6 +118,7 @@ class Grid(NamedTuple):
     mean_exchange_discretization: str
     sbp_transfer_mode: str
     sbp_corrector_substeps: int
+    imex_matmul_chunk: int
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +336,12 @@ def _build_imex_inv(G_Z: np.ndarray, dirichlet_stencil: np.ndarray,
 
     N_gal = N - 1
     inv_matrices = np.zeros((n_shells, N_gal, N_gal), dtype=dtype)
-    q_solve_matrices = np.zeros((n_shells, N + 1, N + 1), dtype=dtype)
+    # Dense per-shell q matrices exist only for the Neumann tau solve; for
+    # q_boundary='none' the solve is the scalar 1/alpha_q (grid.inv_alpha_q)
+    # and storing n_shells scaled identities would waste as much memory as
+    # imex_inv itself.
+    q_solve_matrices = (np.zeros((n_shells, N + 1, N + 1), dtype=dtype)
+                        if q_boundary == 'neumann' else None)
 
     for s, ksq_val in enumerate(unique_ksq):
         ksq_p = ksq_val ** hyper_order
@@ -349,11 +356,11 @@ def _build_imex_inv(G_Z: np.ndarray, dirichlet_stencil: np.ndarray,
             N_q[N - 1, :] = tau_neu_top
             N_q[N, :] = tau_neu_bot
             q_solve = np.linalg.inv(N_q) @ P_tau
+            q_solve_matrices[s] = q_solve
         elif q_boundary == 'none':
             q_solve = (1.0 / alpha_q) * I
         else:
             raise ValueError(f"Unsupported q_boundary={q_boundary!r}")
-        q_solve_matrices[s] = q_solve
 
         denom = ksq_val + Ld_inv_sq
         if denom == 0.0:
@@ -594,7 +601,7 @@ def make_grid(cfg: NHQGConfig) -> Grid:
         inv_alpha_q=to_jax(inv_alpha_q_np),
         inv_alpha_th=to_jax(inv_alpha_th_np),
         imex_inv=to_jax(inv_matrices),
-        q_solve=to_jax(q_solve_matrices),
+        q_solve=to_jax(q_solve_matrices) if q_solve_matrices is not None else None,
         ksq_idx=jnp.array(ksq_idx_2d, dtype=jnp.int32),
         proj_dirichlet=to_jax(proj_dir_np),
         proj_neumann=to_jax(proj_neu_np),
@@ -623,4 +630,5 @@ def make_grid(cfg: NHQGConfig) -> Grid:
         mean_exchange_discretization=cfg.mean_exchange_discretization,
         sbp_transfer_mode=cfg.sbp_transfer_mode,
         sbp_corrector_substeps=cfg.sbp_corrector_substeps,
+        imex_matmul_chunk=cfg.imex_matmul_chunk,
     )

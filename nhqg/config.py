@@ -52,6 +52,9 @@ class NHQGConfig:
     mean_exchange_discretization: str = "legacy"  # "legacy", "coral_workgrid", "coral_workgrid_weakmean", "coral_workgrid_paired", "balanced_midpoint", "balanced_sbp2", or "balanced_sbp2_pc"
     sbp_transfer_mode: str = "interp"  # "interp", "mass_adjoint", or "weighted_polar"
     sbp_corrector_substeps: int = 1  # Number of repeated SBP thermal corrector substeps per inserted stage
+    imex_matmul_chunk: int = 0  # >0: apply per-shell IMEX matrices in chunks of this many kx rows
+                                # (caps the gathered-matrix working set at chunk*Nk*(Nz+1)^2
+                                # instead of Nx*Nk*(Nz+1)^2); 0 = single full gather
 
     @property
     def Nk(self) -> int:
