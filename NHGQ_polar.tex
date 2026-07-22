@@ -1,0 +1,542 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black}
+
+\newcommand{\pderiv}[2]{\frac{\partial #1}{\partial #2}}
+\newcommand{\Rav}{\widetilde{\mathrm{Ra}}}
+\newcommand{\Ek}{\mathrm{Ek}}
+\newcommand{\Ld}{L_d}
+\newcommand{\Lc}{L_c}
+\newcommand{\kh}{|\bm{k}|}
+\newcommand{\Jac}[2]{J\!\left[#1,\,#2\right]}
+\newcommand{\avg}[1]{\langle #1 \rangle}
+\newcommand{\hhat}[1]{\widehat{#1}}
+\newcommand{\Dvec}{\bm{D}}
+
+\title{\textbf{Polar Cap Extension of the NHQGE Solver\\[4pt] via the Trap Method}\\[8pt]
+\large Modifications to the Doubly-Periodic Chebyshev Solver\\for Jupiter Polar Vortex Dynamics}
+\author{Formulation Notes}
+\date{February 2026}
+
+\begin{document}
+\maketitle
+%\tableofcontents
+\vspace{1em}
+
+%======================================================================
+\section{Overview}
+%======================================================================
+
+This document describes the minimal modifications required to extend the doubly-periodic NHQGE solver (Fourier in $x,y$; Chebyshev collocation in $Z$) from a flat $\beta$-plane configuration to a polar cap geometry suitable for modeling Jupiter's polar vortex dynamics. The extension follows the ``trap'' method of Siegelman, Young \& Ingersoll (2022, PNAS), generalized from their barotropic formulation to the full three-dimensional NHQGE system.
+
+The key idea: the polar cap geometry is encoded entirely in the background potential vorticity $\eta(x,y)$. No changes to the grid, spectral methods, time-stepping, boundary conditions, vertical discretization, or inversion are required. The solver remains doubly periodic in $(x,y)$ with Chebyshev collocation in $Z$. Dynamics are confined to a circular region within the periodic domain by a smooth PV barrier (the ``trap'').
+
+%======================================================================
+\section{From the Flat Beta-Plane to the Polar Cap}
+%======================================================================
+
+\subsection{The flat beta-plane PV equation}
+
+In the base solver, the PV equation reads:
+\begin{equation}
+\pderiv{q'}{t} + \Jac{\psi}{q'} + \beta\,\pderiv{\psi}{x} - \pderiv{w}{Z} = \text{dissipation},
+\label{eq:beta_plane}
+\end{equation}
+where $q' = \nabla_\perp^2\psi - \psi/\Ld^2$ is the perturbation PV and $\beta\psi_x$ represents advection of the background PV gradient $\beta y$ by the flow $(u,v) = (-\psi_y, \psi_x)$.
+
+The term $\beta\psi_x$ is the special case of a \emph{linear} background PV, $\eta(x,y) = \beta y$, for which:
+\begin{equation}
+\Jac{\psi}{\eta} = \Jac{\psi}{\beta y} = \beta\,\psi_x.
+\end{equation}
+
+\subsection{General background PV}
+
+For a general (nonlinear) background PV $\eta(x,y)$, the PV equation becomes:
+\begin{equation}
+\pderiv{q'}{t} + \Jac{\psi}{q' + \eta} - \pderiv{w}{Z} = \text{dissipation},
+\label{eq:general_pv}
+\end{equation}
+or equivalently, since $\eta$ is time-independent:
+\begin{equation}
+\pderiv{q'}{t} + \Jac{\psi}{q'} + \Jac{\psi}{\eta} - \pderiv{w}{Z} = \text{dissipation}.
+\label{eq:general_pv2}
+\end{equation}
+
+The only change from the flat $\beta$-plane is the replacement:
+\begin{equation}
+\boxed{\beta\,\psi_x \;\;\longrightarrow\;\; \Jac{\psi}{\eta} \;=\; \psi_x\,\eta_y - \psi_y\,\eta_x}
+\label{eq:replacement}
+\end{equation}
+
+Everything else in the NHQGE system---the $w$ equation, the $\theta$ equation, the inversion, the vertical coupling, the boundary conditions, the dissipation---is unchanged.
+
+\subsection{The polar cap background PV}
+
+Near the pole of a planet with Coriolis parameter $f$ and polar radius $a_p$, the vertical component of the Coriolis parameter varies as:
+\begin{equation}
+f(r) = f_p\!\left(1 - \frac{r^2}{2a_p^2}\right) + O(r^4/a_p^4),
+\end{equation}
+where $r = \sqrt{x^2 + y^2}$ is the distance from the pole and $f_p = 2\Omega$ is the Coriolis parameter at the pole. The background (planetary) PV associated with this variation is:
+\begin{equation}
+\eta_{\mathrm{polar}}(r) = f(r) - f_p = -\frac{1}{2}\gamma\,r^2,
+\label{eq:eta_polar}
+\end{equation}
+where:
+\begin{equation}
+\boxed{\gamma \equiv \frac{f_p}{a_p^2}}
+\label{eq:gamma_def}
+\end{equation}
+is the single parameter characterizing the polar geometry. Note that $\gamma$ plays the role of $\beta$ but is \emph{isotropic} (radial) rather than unidirectional---it is the leading-order curvature of the Coriolis parameter near the pole.
+
+For Jupiter: $f_p = 3.52 \times 10^{-4}\;\mathrm{s}^{-1}$, $a_p \approx 6.7\times 10^7\;\mathrm{m}$ (polar radius), giving $\gamma \approx 7.8 \times 10^{-20}\;\mathrm{m}^{-2}\,\mathrm{s}^{-1}$.
+
+\subsection{Gradients of the polar PV}
+
+The gradients of $\eta_{\mathrm{polar}} = -\gamma r^2/2$ are:
+\begin{equation}
+\eta_x = -\gamma\, x, \qquad \eta_y = -\gamma\, y.
+\label{eq:eta_gradients}
+\end{equation}
+
+The Jacobian with the streamfunction is therefore:
+\begin{equation}
+\Jac{\psi}{\eta_{\mathrm{polar}}} = \psi_x\,\eta_y - \psi_y\,\eta_x = -\gamma\!\left(x\,\psi_y - y\,\psi_x\right) = \gamma\!\left(x\,v + y\,u\right),
+\label{eq:jac_psi_eta}
+\end{equation}
+where $u = -\psi_y$ and $v = \psi_x$. In terms of velocity components this is $\gamma\,\bm{x}\cdot\bm{u}_\perp$, where $\bm{u}_\perp = (v, -u)$ is the velocity rotated $90^\circ$ clockwise. Physically, it represents the advection of planetary vorticity by the geostrophic flow---the polar analog of $\beta v$ on the $\beta$-plane, but with the gradient pointing radially inward toward the pole from all directions.
+
+%======================================================================
+\section{The Trap}
+\label{sec:trap}
+%======================================================================
+
+\subsection{Purpose}
+
+The doubly-periodic domain is a square $[0, L]^2$, but the polar cap dynamics should be confined to a circular region centered at the domain center. Outside this region, the dynamics should be quiescent---otherwise the periodic boundary conditions create unphysical interactions between opposite edges of the domain, which correspond to diametrically opposite points far from the pole.
+
+Siegelman et al.\ (2022) solved this by introducing a \emph{trap}: a smooth modification of the background PV that creates a large PV step at a specified radius $r_\star$. This PV barrier acts as a dynamical wall that confines the turbulence to the interior of the trap.
+
+\subsection{Trap construction}
+
+Define the domain center as $(x_c, y_c) = (L/2, L/2)$ and the radial coordinate:
+\begin{equation}
+r = \sqrt{(x - x_c)^2 + (y - y_c)^2}.
+\end{equation}
+
+The trapped polar PV is:
+\begin{equation}
+\boxed{\eta(x,y) = -\frac{1}{2}\gamma\,r^2 \;\times\; \sigma_{\mathrm{trap}}(r)}
+\label{eq:eta_trap}
+\end{equation}
+where $\sigma_{\mathrm{trap}}(r)$ is an activation function that is $\approx 1$ for $r < r_\star$ and drops smoothly to $0$ for $r > r_\star$:
+\begin{equation}
+\sigma_{\mathrm{trap}}(r) = \frac{1}{2}\left[1 - \tanh\!\left(A_d\,\frac{r - r_\star}{r_\star}\right)\right].
+\label{eq:sigma_trap}
+\end{equation}
+
+Here:
+\begin{itemize}[nosep]
+\item $r_\star$ is the trap radius, typically set to $\sim 45\%$ of the domain half-width: $r_\star = 0.45 \times L/2$.
+\item $A_d > 0$ controls the sharpness of the trap boundary. Siegelman et al.\ used $|A_d| = 20$ (they defined it with opposite sign convention). Larger $A_d$ gives a sharper transition.
+\end{itemize}
+
+The activation function satisfies:
+\begin{equation}
+\sigma_{\mathrm{trap}}(r) \approx \begin{cases}
+1 & r \ll r_\star, \\
+1/2 & r = r_\star, \\
+0 & r \gg r_\star.
+\end{cases}
+\end{equation}
+
+The resulting PV landscape has a deep ``bowl'' of negative planetary PV centered on the pole (for the North Pole, where $f_p > 0$ and cyclones are positive), with steep walls at $r = r_\star$. Cyclonic vorticity generated by convection inside the trap accumulates near the pole (due to the $\gamma$-effect driving poleward beta-drift), while the PV step at $r_\star$ prevents escape.
+
+\subsection{Gradients of the trapped PV}
+
+The gradients of $\eta(x,y)$ as defined in \eqref{eq:eta_trap} are:
+\begin{align}
+\eta_x &= -\gamma\,(x-x_c)\,\sigma_{\mathrm{trap}} - \frac{1}{2}\gamma\,r^2\,\frac{\partial\sigma_{\mathrm{trap}}}{\partial x},\label{eq:eta_x_trap}\\
+\eta_y &= -\gamma\,(y-y_c)\,\sigma_{\mathrm{trap}} - \frac{1}{2}\gamma\,r^2\,\frac{\partial\sigma_{\mathrm{trap}}}{\partial y},\label{eq:eta_y_trap}
+\end{align}
+where:
+\begin{align}
+\frac{\partial\sigma_{\mathrm{trap}}}{\partial x} &= -\frac{A_d}{2r_\star}\,\mathrm{sech}^2\!\left(A_d\,\frac{r - r_\star}{r_\star}\right)\frac{x - x_c}{r},\\
+\frac{\partial\sigma_{\mathrm{trap}}}{\partial y} &= -\frac{A_d}{2r_\star}\,\mathrm{sech}^2\!\left(A_d\,\frac{r - r_\star}{r_\star}\right)\frac{y - y_c}{r}.
+\end{align}
+
+\textbf{However}, in practice it is simpler and more robust to precompute $\eta(x,y)$ on the physical grid and obtain $\eta_x, \eta_y$ spectrally:
+\begin{equation}
+\hhat\eta_x = ik_x\,\hhat\eta, \qquad \hhat\eta_y = ik_y\,\hhat\eta.
+\label{eq:eta_grad_spectral}
+\end{equation}
+This automatically handles the trap boundary smoothly without needing to differentiate the $\tanh$ analytically, and it applies the same spectral truncation to $\eta$ and its gradients as to the dynamical fields. The only caveat is that $\eta$ should be smooth enough (large enough $A_d^{-1}$) to be well-resolved by the horizontal grid.
+
+\subsection{Precomputation (done once at initialization)}
+
+The following fields are computed once on the \emph{unpadded} physical grid $(N_x \times N_x)$ and stored:
+\begin{enumerate}[nosep]
+\item $\eta(x_i, y_j)$ from \eqref{eq:eta_trap}.
+\item $\hhat\eta(k_x, k_y) = \mathrm{rfft2}[\eta]$.
+\item $\eta_x(x_i, y_j) = \mathrm{irfft2}[ik_x\,\hhat\eta]$.
+\item $\eta_y(x_i, y_j) = \mathrm{irfft2}[ik_y\,\hhat\eta]$.
+\end{enumerate}
+
+Also precompute on the \emph{padded} grid $(N_x^{\mathrm{pad}} \times N_x^{\mathrm{pad}})$:
+\begin{enumerate}[nosep,resume]
+\item $\eta_x^{\mathrm{pad}}(x_i, y_j)$ and $\eta_y^{\mathrm{pad}}(x_i, y_j)$: the PV gradients interpolated to the dealiased physical grid. This is done by zero-padding $\hhat\eta_x$ and $\hhat\eta_y$ to $(N_x^{\mathrm{pad}}, N_x^{\mathrm{pad}}/2+1)$ and applying the padded inverse FFT, with the same normalization as the Jacobian dealiasing.
+\end{enumerate}
+
+Total storage: 2 real-valued 2D arrays on the padded grid ($\eta_x^{\mathrm{pad}}, \eta_y^{\mathrm{pad}}$). Negligible memory.
+
+%======================================================================
+\section{Modified RHS Evaluation}
+\label{sec:rhs}
+%======================================================================
+
+The RHS evaluation algorithm is identical to the base solver with one modification in Step~3 (horizontal Jacobians) and the removal of the $\beta$-term from Step~4 (assembly).
+
+\subsection{Recall: base solver RHS at each CGL point}
+
+In the flat $\beta$-plane solver, the PV tendency at collocation point $Z_j$ in horizontal spectral space is:
+\begin{equation}
+R^{(q)}_j = -\hhat{F}^{(q)}_j - i\beta\,k_x\,\hhat\psi_j + (\Dvec_Z\,\bm{w})_j + \text{dissipation},
+\label{eq:rhs_beta}
+\end{equation}
+where $\hhat{F}^{(q)}_j$ is the spectral Jacobian $\widehat{\Jac{\psi}{q'}}$ at level $j$, and the $\beta$ term is evaluated in spectral space (diagonal multiplication).
+
+\subsection{Polar cap RHS: absorb into the Jacobian}
+
+In the polar cap solver, replace the $\beta\psi_x$ term with $\Jac{\psi}{\eta}$. This is done by computing the Jacobian of $\psi$ with $(q' + \eta)$ instead of $q'$ alone:
+\begin{equation}
+R^{(q)}_j = -\widehat{\Jac{\psi_j}{q'_j + \eta}} + (\Dvec_Z\,\bm{w})_j + \text{dissipation}.
+\label{eq:rhs_polar}
+\end{equation}
+
+Note that $\eta(x,y)$ is independent of $Z$---the same background PV applies at every vertical level. This is the correct QG scaling: the planetary PV gradient is barotropic.
+
+\subsection{Implementation: two equivalent approaches}
+
+\subsubsection{Approach A: Augment the PV field before the Jacobian}
+
+At each CGL point $Z_j$, before computing the horizontal Jacobian, form:
+\begin{equation}
+\hhat{Q}_j(\bm{k}) = \hhat{q}'_j(\bm{k}) + \hhat\eta(\bm{k}).
+\end{equation}
+Then compute $\Jac{\psi_j}{Q_j}$ instead of $\Jac{\psi_j}{q'_j}$.
+
+\textbf{Cost:} One complex addition per $(k_x, k_y)$ per $Z$-level. The Jacobian itself requires the same 5 FFTs as before.
+
+\textbf{Advantage:} No additional FFTs. No additional physical-space arrays. The $\eta$ contribution to the Jacobian is automatically dealiased by the 3/2-rule since $Q$ is formed before padding.
+
+\textbf{Pseudocode:}
+\begin{verbatim}
+  # At each Z_j:
+  Q_hat_j = q_hat_j + eta_hat   # augment PV with background
+  Jac_q_j = jacobian(psi_hat_j, Q_hat_j)   # standard dealiased Jacobian
+  # No separate beta term needed
+\end{verbatim}
+
+This is the cleanest approach. It adds exactly one line of code to the existing solver.
+
+\subsubsection{Approach B: Compute the background Jacobian separately in physical space}
+
+During the Jacobian evaluation at $Z_j$, after transforming $\psi_x$ and $\psi_y$ to the padded physical grid, compute the additional contribution:
+\begin{equation}
+\Jac{\psi}{\eta}\big|_{\mathrm{phys}} = (\psi_x)^{\mathrm{pad}} \cdot \eta_y^{\mathrm{pad}} - (\psi_y)^{\mathrm{pad}} \cdot \eta_x^{\mathrm{pad}},
+\end{equation}
+using the precomputed $\eta_x^{\mathrm{pad}}, \eta_y^{\mathrm{pad}}$ arrays.
+
+\textbf{Cost:} Two multiplications and one subtraction on the padded physical grid per $Z$-level. No additional FFTs (the derivatives $\psi_x, \psi_y$ are already computed for the dynamical Jacobian).
+
+\textbf{Advantage:} The background PV contribution is computed separately, making diagnostics easier (you can output $\Jac{\psi}{q'}$ and $\Jac{\psi}{\eta}$ independently). Also avoids forming $Q = q' + \eta$ in spectral space, which at very early times when $q'$ is small could in principle introduce rounding issues (though this is not a practical concern).
+
+\textbf{Either approach is correct.} Approach~A is recommended for simplicity.
+
+\subsection{Summary of modifications to the RHS}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Component & Flat $\beta$-plane & Polar cap \\
+\midrule
+PV Jacobian argument & $\Jac{\psi}{q'}$ & $\Jac{\psi}{q' + \eta}$ \\
+Linear PV advection & $+i\beta k_x \hhat\psi_j$ (spectral) & absorbed into Jacobian \\
+$w$ equation & unchanged & unchanged \\
+$\theta$ equation & unchanged & unchanged \\
+Inversion & unchanged & unchanged \\
+Vertical derivatives & unchanged & unchanged \\
+BC enforcement & unchanged & unchanged \\
+Dissipation & unchanged & unchanged \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%======================================================================
+\section{Sponge Layer (Optional Damping Outside the Trap)}
+\label{sec:sponge}
+%======================================================================
+
+The PV barrier from the trap activation function provides a \emph{dynamical} confinement---vortices cannot easily cross the large PV gradient at $r = r_\star$. However, weak wave activity (Rossby waves) can still propagate outward and reflect off the periodic boundaries. To suppress this, an optional sponge layer provides explicit damping outside the trap.
+
+\subsection{Spatially varying drag}
+
+Add a damping term to \emph{all three} prognostic equations:
+\begin{equation}
+\pderiv{f}{t} = \text{RHS} - \lambda(r)\,f,
+\label{eq:sponge}
+\end{equation}
+where $f$ is any of $q', w, \theta$, and $\lambda(r)$ is a spatially varying damping rate:
+\begin{equation}
+\lambda(r) = \lambda_{\max} \times \frac{1}{2}\left[1 + \tanh\!\left(A_s\,\frac{r - r_s}{r_s}\right)\right],
+\label{eq:lambda_sponge}
+\end{equation}
+with:
+\begin{itemize}[nosep]
+\item $r_s > r_\star$: the sponge activation radius (just outside the trap, e.g.\ $r_s = 1.05\,r_\star$).
+\item $A_s$: sharpness of sponge onset (e.g.\ $A_s = 10$).
+\item $\lambda_{\max}$: maximum damping rate (e.g.\ $\lambda_{\max} \sim 10/\Delta t$ for very strong damping).
+\end{itemize}
+
+\subsection{Implementation}
+
+The sponge is multiplicative in physical space. Precompute $\lambda(x_i, y_j)$ on the unpadded grid at initialization. At each RK4 sub-step, after computing the full RHS in spectral space, transform to physical space, subtract $\lambda \cdot f$, and transform back. Alternatively, since $\lambda(r)$ is smooth and broad-spectrum, treat the sponge implicitly:
+\begin{equation}
+\hhat{f}^{n+1} = \hhat{f}^* \cdot \exp\!\left(-\bar\lambda\,\Delta t\right),
+\end{equation}
+where $\bar\lambda$ is an effective damping rate. However, because $\lambda$ varies spatially, the implicit treatment is only approximate. The simpler approach is explicit damping within the RK4 stages.
+
+\textbf{In practice}, the trap's PV barrier is usually sufficient and the sponge is a safety measure. Siegelman et al.\ (2022) did not report needing a sponge layer---the trap alone confined the dynamics effectively. Include the sponge as an option that can be toggled off.
+
+
+%======================================================================
+\section{Convective Forcing Inside the Trap}
+\label{sec:forcing}
+%======================================================================
+
+The NHQGE system generates its own convective forcing through the buoyancy coupling between $w$ and $\theta$---no external stochastic forcing is needed, unlike the barotropic model of Siegelman et al.\ (2022). This is a major advantage of the 3D NHQGE over the 2D barotropic model: the convective energy injection is self-consistent and emerges from the thermal boundary conditions and the reduced Rayleigh number $\Rav$.
+
+\subsection{Energy injection pathway}
+
+The physical sequence is:
+\begin{enumerate}[nosep]
+\item The unstable temperature gradient ($\partial_Z\bar\Theta < 0$) drives convective instability at horizontal scales $\sim \Lc$ (set by $\Rav$).
+\item Convection generates baroclinic kinetic energy (vertical velocity $w$, baroclinic streamfunction modes).
+\item Nonlinear interactions transfer energy upscale (inverse cascade) and toward the barotropic mode.
+\item The $\gamma$-effect (polar PV gradient) breaks the isotropy of the inverse cascade, driving cyclonic vorticity poleward.
+\item The finite deformation radius $\Ld$ (if included) arrests the cascade at $\sim\Ld$.
+\item The interplay of $\gamma$, $\Ld$, and the convective injection rate determines the emergent structure: lone polar cyclone, vortex crystal, or jets.
+\end{enumerate}
+
+\subsection{Spatial uniformity of forcing}
+
+In the NHQGE, convection is forced by the temperature gradient $\partial_Z\bar\Theta$ which is horizontally uniform (the conduction profile $\bar\Theta = 1 - Z$). The convective forcing therefore operates uniformly across the entire periodic domain, including outside the trap. This is physically appropriate: convective energy injection occurs everywhere in Jupiter's polar weather layer, not just within the vortex crystal region.
+
+The trap confines the \emph{barotropic} inverse cascade (which is driven by the $\gamma$-effect) without needing to confine the baroclinic convective forcing. Convection outside the trap simply generates small-scale turbulence that is damped by the sponge (if active) or remains at small scales without participating in the organized polar dynamics.
+
+If, for physical or numerical reasons, one wishes to confine the convective forcing to the trap interior, this can be done by multiplying $\Rav$ by $\sigma_{\mathrm{trap}}(r)$---effectively turning off thermal forcing outside the trap. This is straightforward but usually unnecessary.
+
+
+%======================================================================
+\section{Nondimensional Parameters for the Polar Cap}
+\label{sec:params_polar}
+%======================================================================
+
+\subsection{The polar parameter in NHQGE-natural units}
+
+In the base solver, lengths are in units of $\Lc$ (convective scale), the vertical coordinate is in units of $h$ (layer depth), and time is in units of the convective turnover time. The nondimensional polar parameter is:
+\begin{equation}
+\gamma_{\mathrm{nd}} = \gamma_{\mathrm{dim}} \times \Lc^3 \times \frac{1}{\nu/\Lc} = \gamma_{\mathrm{dim}} \times \frac{\Lc^4}{\nu},
+\end{equation}
+where the factor of $\Lc^3$ comes from $[\gamma] = \mathrm{m}^{-2}\mathrm{s}^{-1}$ and we need $\gamma_{\mathrm{nd}} \times r_{\mathrm{nd}}^2$ to give an inverse-time in code units. More transparently:
+\begin{equation}
+\gamma_{\mathrm{nd}} = \gamma_{\mathrm{dim}} \times \frac{\Lc^2}{(2\Omega\epsilon^2)},
+\end{equation}
+which is the ratio of the polar PV curvature to the inverse convective time scale, at the convective length scale.
+
+\subsection{Key length scales}
+
+\begin{center}
+\begin{tabular}{cll}
+\toprule
+Scale & Expression & Physical meaning \\
+\midrule
+$\Lc$ & (unit length in code) & Convective injection scale \\
+$\Ld$ & (input parameter) & Deformation radius, cascade arrest \\
+$L_\gamma = (U/\gamma)^{1/3}$ & (emergent) & Crystal radius (Siegelman et al.) \\
+$r_\star$ & (input) & Trap radius \\
+$L$ & (input) & Domain size \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The fundamental prediction of Siegelman et al.\ (2022) is that $L_\gamma$ sets the crystal radius. In the NHQGE context, $U$ (the rms velocity) is not prescribed but emerges from the convective dynamics controlled by $\Rav$ and $\sigma$. Thus the crystal radius depends on the full parameter set $(\Rav, \sigma, \gamma, \Ld)$.
+
+\subsection{Parameter regime for Jupiter}
+
+Using the effective (turbulent) convective scale $\Lc^{\mathrm{eff}} \sim 100\;\mathrm{km}$:
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Parameter & Value \\
+\midrule
+$\Rav$ & $\sim 100$ (adjustable) \\
+$\sigma$ & $\sim 1$ \\
+$\gamma_{\mathrm{nd}}$ & set to produce $L_\gamma \sim 50\,\Lc$ \\
+$\Ld^{\mathrm{nd}}$ & $\sim 2$--$4$ (in units of $\Lc^{\mathrm{eff}}$)  \\
+$r_\star$ & $\sim 0.45\,L/2$ \\
+$L$ & $\gtrsim 100\,\Lc$ (to accommodate $L_\gamma$ within trap) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The domain must satisfy $L \gg L_\gamma$ so that the crystal fits comfortably within the trap. A practical rule: $L \ge 4\,L_\gamma$, giving $r_\star \approx 0.45 \times L/2 \approx 0.9\,L_\gamma$.
+
+
+%======================================================================
+\section{Diagnostics Specific to the Polar Cap}
+\label{sec:diagnostics}
+%======================================================================
+
+\subsection{Restriction to the trap interior}
+
+All spatial diagnostics (spectra, mean profiles, integral quantities) should be restricted to the trap interior $r < r_\star$. In practice, multiply fields by $\sigma_{\mathrm{trap}}(r)$ before computing diagnostics, or use an indicator mask.
+
+\subsection{Azimuthal decomposition}
+
+Inside the trap, azimuthal Fourier decomposition around the pole provides physically meaningful diagnostics:
+\begin{equation}
+f(r, \theta) = \sum_{m=-\infty}^{\infty} \hat{f}_m(r)\,e^{im\theta},
+\end{equation}
+where $(r, \theta)$ are polar coordinates centered on the domain center. This is computed by interpolating the Cartesian-grid fields to a polar grid and applying an FFT in $\theta$ at each $r$.
+
+Key diagnostics:
+\begin{itemize}[nosep]
+\item $m = 0$: azimuthally symmetric component (polar cyclone, mean PV profile).
+\item $m = N_v$: circumpolar vortex pattern with $N_v$ vortices. Jupiter's north pole has $m = 8$, south pole $m = 5$.
+\item Azimuthal energy spectrum $E(m)$: identifies the dominant crystal mode.
+\item Time evolution of the $m = N_v$ amplitude: measures crystal emergence and stability.
+\end{itemize}
+
+\subsection{Vortex tracking}
+
+Identify individual cyclones as local maxima of the barotropic vorticity field $\zeta_0 = \nabla_\perp^2\psi_0$ (depth-averaged relative vorticity). Track their positions $(x_i(t), y_i(t))$ over time to measure:
+\begin{itemize}[nosep]
+\item Crystal rotation rate (solid-body rotation of the vortex pattern).
+\item Oscillation amplitudes (cf.\ Gavriel \& Kaspi 2022).
+\item Beta-drift velocities.
+\item Merger events.
+\end{itemize}
+
+\subsection{Energy spectra on the polar cap}
+
+The isotropic energy spectrum $E(k)$ is computed as before (shell-averaging of $\kh^2|\hhat\psi|^2$), but restricted to the trap interior. An alternative is the radial energy spectrum $E(r)$ obtained by integrating $|\bm{u}|^2/2$ over annuli---this directly shows the radial structure of the crystal.
+
+\subsection{Comparison with Siegelman et al.\ (2022) diagnostics}
+
+For validation against the barotropic results:
+\begin{itemize}[nosep]
+\item Crystal radius vs.\ $L_\gamma = (U/\gamma)^{1/3}$: does the NHQGE produce the same scaling?
+\item Number of vortices in the crystal: sensitive to $L_\gamma / \Ld$ ratio?
+\item PV homogenization inside the crystal: does the barotropic PV tend toward uniform values between cyclones?
+\end{itemize}
+
+
+%======================================================================
+\section{Validation Cases}
+\label{sec:validation}
+%======================================================================
+
+\subsection{Case P0: Barotropic limit recovery}
+
+Set $N_Z = 1$ (effectively barotropic), $\Ld = \infty$, prescribe an initial small-scale random vorticity field matching Siegelman et al.\ (2022) parameters. Verify that the solver reproduces their vortex crystal phenomenology: crystal radius $\sim L_\gamma$, long-lived quasi-regular array, PV homogenization.
+
+This tests the trap implementation and the $\gamma$-effect without the complication of baroclinic dynamics.
+
+\subsection{Case P1: Convectively forced, no polar effect}
+
+$\gamma = 0$, $\Ld = \infty$, trap active (but irrelevant since there is no $\gamma$-driven poleward drift). This should reproduce the Rubio et al.\ (2014) isotropic condensation---a domain-filling dipolar vortex---confirming that the trap does not interfere with the inverse cascade when $\gamma = 0$.
+
+\subsection{Case P2: Convectively forced with polar PV}
+
+$\gamma > 0$, $\Ld = \infty$. The inverse cascade is now anisotropic. Cyclonic vorticity should accumulate near the pole (center of trap). Depending on the ratio of the convective injection scale to $L_\gamma$, expect either a lone polar cyclone (large $\gamma$) or a vortex crystal (small to moderate $\gamma$).
+
+This is the first genuinely new result: a convectively forced polar vortex crystal, where the convective injection is self-consistent rather than prescribed.
+
+\subsection{Case P3: Convectively forced with polar PV and finite deformation radius}
+
+$\gamma > 0$, $\Ld$ finite. The deformation radius arrests the cascade at a scale intermediate between the convective injection and the crystal radius. This is the most Jovian-relevant configuration.
+
+Key question: does $\Ld$ control the size of individual circumpolar cyclones (as suggested by observations showing cyclone diameters $\sim \Ld$)?
+
+\subsection{Case P4: Parameter sweep}
+
+Batch over $(\gamma, \Ld)$ on the H100/H200. Map the phase diagram:
+\begin{itemize}[nosep]
+\item Small $\gamma$, large $\Ld$: isotropic condensation (no crystal).
+\item Large $\gamma$, large $\Ld$: lone polar cyclone.
+\item Moderate $\gamma$, moderate $\Ld$: vortex crystal (the Jupiter regime).
+\item Moderate $\gamma$, small $\Ld$: many small vortices, possibly disorganized.
+\end{itemize}
+
+
+%======================================================================
+\section{Implementation Checklist}
+\label{sec:checklist}
+%======================================================================
+
+Modifications to the existing doubly-periodic Chebyshev solver:
+
+\begin{enumerate}[nosep]
+\item \textbf{Initialization:} Compute $\eta(x,y)$ on the physical grid from \eqref{eq:eta_trap} using input parameters $\gamma$, $r_\star$, $A_d$. Compute $\hhat\eta$ via \texttt{rfft2}.
+
+\item \textbf{RHS evaluation:} At each CGL point $Z_j$, replace
+\begin{center}
+\texttt{Jac\_q = jacobian(psi\_hat\_j, q\_hat\_j)} \\
+$\downarrow$ \\
+\texttt{Jac\_q = jacobian(psi\_hat\_j, q\_hat\_j + eta\_hat)}
+\end{center}
+Remove the $\beta\psi_x$ spectral term.
+
+\item \textbf{(Optional) Sponge:} Precompute $\lambda(x,y)$ on the physical grid. Add $-\lambda\cdot f$ to the RHS of all three equations.
+
+\item \textbf{Parameters:} Replace $\beta$ (scalar) with $\gamma$ (scalar), $r_\star$ (scalar), $A_d$ (scalar) in the configuration.
+
+\item \textbf{Diagnostics:} Add azimuthal decomposition, vortex tracking, trap-restricted spectra.
+\end{enumerate}
+
+That's it. Five items, of which only item~2 touches the core solver, and it is a one-line change.
+
+
+%======================================================================
+\section{Summary}
+\label{sec:summary}
+%======================================================================
+
+\noindent\fbox{\parbox{0.95\textwidth}{
+\textbf{Polar cap NHQGE = base solver + one modification:}
+
+\vspace{0.5em}
+Replace the flat $\beta$-plane PV advection
+\[
+\beta\,\psi_x
+\]
+with the Jacobian against the trapped polar background PV
+\[
+\Jac{\psi}{\eta}, \qquad \eta(x,y) = -\tfrac{1}{2}\gamma\,r^2\,\sigma_{\mathrm{trap}}(r),
+\]
+implemented by augmenting $q' \to q' + \eta$ before the standard dealiased Jacobian computation.
+
+\vspace{0.5em}
+\textbf{New parameters:} $\gamma = f_p/a_p^2$ (polar PV curvature), $r_\star$ (trap radius), $A_d$ (trap sharpness).
+
+\vspace{0.5em}
+\textbf{Everything else is unchanged:} grid, FFTs, Chebyshev vertical, inversion, BCs, dissipation, time-stepping, GPU layout, batch strategy.
+}}
+
+\end{document}

@@ -1,0 +1,619 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black}
+
+\newcommand{\pderiv}[2]{\frac{\partial #1}{\partial #2}}
+\newcommand{\Rav}{\widetilde{\mathrm{Ra}}}
+\newcommand{\avg}[1]{\langle #1 \rangle}
+\newcommand{\kh}{|\bm{k}|}
+\newcommand{\Dzone}{D^{(1)}_z}
+\newcommand{\Dztwo}{D^{(2)}_z}
+\newcommand{\Hmat}{H}
+\newcommand{\Emat}{E_D}
+\newcommand{\Pmat}{P_N}
+\newcommand{\Gmat}{G}
+
+\title{\textbf{Vertical Operator Experiments for the FD NHQG Benchmark}\\[8pt]
+\large Compact Schemes, SBP Structure, Compatibility, and Nonnormality}
+\author{}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+\vspace{0.5em}
+
+\section{Purpose}
+
+This note records the operator-level reasoning behind the finite-difference-in-$z$
+benchmark branch in \texttt{fd\_vertical\_benchmark/}, with particular focus on
+two replacement families for the legacy centered second-order vertical
+operators:
+\begin{itemize}[nosep]
+\item compact ``spectral-tending'' operators,
+\item summation-by-parts (SBP) operators designed around a discrete energy law.
+\end{itemize}
+
+The key lesson from the first compact experiment is subtle:
+\begin{itemize}[nosep]
+\item a compact first derivative can be \emph{much more accurate} as a local
+  derivative approximation,
+\item yet still be a \emph{worse} building block for the NHQG coupled implicit
+  operator if it is not paired with a compatible second derivative and
+  compatible boundary closures.
+\end{itemize}
+
+So the goal is not simply to make the stencil higher-order. The goal is to make
+the \emph{semi-discrete operator family} coherent.
+
+\section{Where the Vertical Operators Enter}
+
+In the FD benchmark, the prognostic fluctuation fields
+$\psi(z,\bm{k},t)$, $w(z,\bm{k},t)$, $\theta(z,\bm{k},t)$ are stored on a
+uniform vertical grid. The mean temperature deviation $\Theta'_b(z,t)$ is also
+stored on the same vertical grid, but only at interior Dirichlet nodes.
+
+The relevant discrete maps are:
+\begin{itemize}[nosep]
+\item $\Emat$: interior Dirichlet extension, inserting zero boundary values,
+\item $\Pmat$: Neumann reconstruction for $\psi$, recovering boundary values
+  from interior values so that the discrete derivative vanishes at $z=0,1$,
+\item $\Dzone$: full-grid first-derivative matrix,
+\item $\Dztwo$: interior Dirichlet second-derivative matrix.
+\end{itemize}
+
+From these, the solver constructs
+\begin{align}
+D^{(\psi)}_z &= S_{\mathrm{int}}\,\Dzone\,\Pmat,
+\\
+D^{(D)}_z &= S_{\mathrm{int}}\,\Dzone\,\Emat,
+\end{align}
+where $S_{\mathrm{int}}$ restricts a full-grid quantity to the interior nodes.
+
+The fluctuation coupling that matters most for the IMEX step is
+\begin{equation}
+\boxed{
+B \;=\; D^{(\psi)}_z D^{(D)}_z.
+}
+\label{eq:B_def}
+\end{equation}
+
+For each horizontal shell $\kh^2$, the FD benchmark precomputes the dense
+interior solve
+\begin{equation}
+\boxed{
+A(\kh) \;=\; \alpha_w^{\mathrm{eff}} I
+- (\gamma \Delta t)^2 \frac{1}{\kh^2\,\alpha_q}\, B.
+}
+\label{eq:A_shell}
+\end{equation}
+
+The mean-temperature solve uses a Dirichlet second derivative:
+\begin{equation}
+\boxed{
+\left(I - \gamma \Delta t\, \frac{\epsilon_b^2}{\sigma}\, \Dztwo \right)\Theta_b'^{\,*}
+= \text{RHS}.
+}
+\label{eq:mean_temp_solve}
+\end{equation}
+
+Therefore the vertical operators matter in \emph{three} logically distinct ways:
+\begin{enumerate}[nosep]
+\item local derivative accuracy,
+\item structural properties of the coupled operator $B$,
+\item dissipativity of the mean-temperature diffusion operator $\Dztwo$.
+\end{enumerate}
+
+\section{What Properties We Actually Need}
+
+\subsection{Consistency and formal order}
+
+At minimum, $\Dzone$ and $\Dztwo$ should approximate $\partial_z$ and
+$\partial_{zz}$ with the intended order on smooth functions. This matters,
+especially for a benchmark branch whose purpose is to isolate vertical
+discretization effects from the horizontal pseudospectral part.
+
+But formal order alone is not enough.
+
+\subsection{Boundary-condition compatibility}
+
+The FD benchmark does not evolve full-grid boundary values independently.
+Instead:
+\begin{itemize}[nosep]
+\item $w$, $\theta$, and $\Theta_b'$ use Dirichlet extension,
+\item $\psi$ uses a reconstructed Neumann boundary map.
+\end{itemize}
+
+So the boundary treatment is not an add-on. It is part of the operator.
+If $\Dzone$ is changed but $\Pmat$ and $\Dztwo$ remain tied to an incompatible lower
+order discretization, the resulting coupled matrices can become highly
+nonnormal even when each separate piece looks reasonable in isolation.
+
+\subsection{Projected versus direct Neumann reduction}
+
+For a compact first derivative, it is often cleaner to think in terms of the
+implicit relation
+\begin{equation}
+\boxed{
+A^{(1)} d = B^{(1)} f,
+}
+\end{equation}
+where $f$ is the full-grid field and $d$ is the full-grid discrete derivative.
+
+In the original FD benchmark implementation, the workflow was:
+\begin{enumerate}[nosep]
+\item solve for the full operator $\Dzone = (A^{(1)})^{-1} B^{(1)}$,
+\item reconstruct boundary values through a separate Neumann map $\Pmat$,
+\item then form the reduced derivative
+  $D_z^{(\psi)} = S_{\mathrm{int}} \Dzone \Pmat$.
+\end{enumerate}
+
+That is algebraically valid, but it separates the compact inversion from the
+boundary elimination.
+
+The more direct construction treats the interior field values $f_i$ as the
+known data, imposes the Neumann conditions $d_b = 0$ at the two boundary nodes,
+and solves in one shot for the unknown interior derivatives $d_i$ and boundary
+values $f_b$. Partitioning the compact relation into boundary and interior
+blocks gives
+\begin{equation}
+\begin{bmatrix}
+A^{(1)}_{bi} & -B^{(1)}_{bb} \\
+A^{(1)}_{ii} & -B^{(1)}_{ib}
+\end{bmatrix}
+\begin{bmatrix}
+d_i \\ f_b
+\end{bmatrix}
+=
+\begin{bmatrix}
+B^{(1)}_{bi} \\ B^{(1)}_{ii}
+\end{bmatrix}
+f_i.
+\label{eq:direct_neumann_reduced}
+\end{equation}
+
+Solving \eqref{eq:direct_neumann_reduced} directly produces both the reduced
+Neumann derivative $D_z^{(\psi)}$ and the reconstruction map $\Pmat$ from the
+\emph{same} linear system. This is conceptually cleaner because the boundary
+conditions are built into the reduced operator itself.
+
+For the present fourth-order compact stencil, the direct and projected
+constructions turned out to be the same operator to numerical precision:
+\begin{itemize}[nosep]
+\item ${\Pmat}_{\mathrm{direct}} - {\Pmat}_{\mathrm{projected}} = 0$ to machine
+  precision in the current audit,
+\item $D_{z,\mathrm{direct}}^{(\psi)}$ and
+  $D_{z,\mathrm{projected}}^{(\psi)}$ differ at only roundoff level.
+\end{itemize}
+
+So the direct construction is best understood as a \emph{cleaner formulation},
+not as a new discretization. If the compact branch remains unstable after this
+rewrite, that points away from bookkeeping error and back toward the operator
+family itself, especially the nonnormality already diagnosed in $B$.
+
+\subsection{A dissipative second derivative}
+
+For a Dirichlet diffusion operator, the fundamental discrete property is not
+just spectral negativity. It is a discrete energy inequality.
+
+Let $\Hmat_{\mathrm{int}}$ be the interior mass matrix and $\Hmat_f$ the full-grid
+quadrature matrix. If $\Gmat$ is the discrete gradient used for Dirichlet
+fields, then the best possible property is
+\begin{equation}
+\boxed{
+D^{(\mathrm{energy})}_{zz}
+\,=\,
+-\,\Hmat_{\mathrm{int}}^{-1}\Gmat^T \Hmat_f \Gmat.
+}
+\label{eq:D2_energy}
+\end{equation}
+
+Then for any interior vector $u$,
+\begin{equation}
+u^T \Hmat_{\mathrm{int}} D^{(\mathrm{energy})}_{zz} u
+=
+- (\Gmat u)^T \Hmat_f (\Gmat u)
+\le 0.
+\label{eq:energy_dissipation}
+\end{equation}
+
+This is the discrete analogue of
+\(
+\int_0^1 u\,u_{zz}\,dz = -\int_0^1 |u_z|^2\,dz
+\)
+for homogeneous Dirichlet data.
+
+For the present FD benchmark, however, there is an important modeling priority:
+\(\Dztwo\) enters only through the implicit mean-temperature equation, while the
+observed instability is primarily a fluctuation problem tied to the first
+derivative coupling \( B = D_z^{(\psi)} D_z^{(D)} \). Therefore the main
+experimental priority is:
+\begin{itemize}[nosep]
+\item invest operator sophistication in \(\Dzone\),
+\item keep \(\Dztwo\) simple and robust unless there is evidence that the
+  mean-temperature diffusion itself is the culprit.
+\end{itemize}
+
+That is why, after the initial SBP implementation, the main comparison branch
+is taken to be
+\[
+\boxed{
+\texttt{sbp42 + centered2}
+}
+\]
+rather than \(\texttt{sbp42 + sbp42\_energy}\). The wide SBP-induced
+\(\Dztwo\) remains useful as a diagnostic branch, but not as the main
+production candidate.
+
+\subsection{Why an SBP branch is the natural fallback}
+
+The compact branch taught us that local derivative accuracy is not enough.
+What we really need is a first derivative together with boundary closures and a
+second derivative that cooperate in an energy estimate.
+
+This is exactly what SBP operators are built to provide. A first-derivative SBP
+operator consists of a positive-definite norm matrix $\Hmat$ and a derivative
+matrix $\Dzone$ such that
+\begin{equation}
+\boxed{
+\Hmat \Dzone + {\Dzone}^T \Hmat = B_{\partial},
+}
+\label{eq:sbp_identity}
+\end{equation}
+where
+\(
+B_{\partial} = \mathrm{diag}(-1,0,\dots,0,1).
+\)
+
+Equation \eqref{eq:sbp_identity} is the discrete analogue of integration by
+parts. For the FD NHQG benchmark this matters in two ways:
+\begin{enumerate}[nosep]
+\item the boundary contribution is explicit and easier to audit than the
+  compact branch's amplification through $\Pmat$,
+\item the same norm matrix $\Hmat$ can be used to build a dissipative Dirichlet
+  Laplacian through \eqref{eq:D2_energy}.
+\end{enumerate}
+
+So the SBP branch is not trying to be more ``spectral'' than compact Pad\'e.
+It is trying to be more \emph{structurally trustworthy}.
+
+\subsection{The concrete SBP operator used here}
+
+The first SBP implementation in the benchmark uses the standard diagonal-norm
+fourth-order interior, second-order boundary operator, often denoted
+$D_1(4,2)$ or ``SBP42''.
+
+Its norm matrix is
+\begin{equation}
+\boxed{
+\Hmat = h\,\mathrm{diag}\!\left(
+\frac{17}{48},\,
+\frac{59}{48},\,
+\frac{43}{48},\,
+\frac{49}{48},\,
+1,\dots,1,\,
+\frac{49}{48},\,
+\frac{43}{48},\,
+\frac{59}{48},\,
+\frac{17}{48}
+\right).
+}
+\label{eq:sbp42_H}
+\end{equation}
+
+The interior stencil is the classical fourth-order centered derivative,
+\begin{equation}
+\boxed{
+(\Dzone f)_i
+=
+\frac{1}{h}\left(
+\frac{1}{12} f_{i-2}
+- \frac{2}{3} f_{i-1}
++ \frac{2}{3} f_{i+1}
+- \frac{1}{12} f_{i+2}
+\right),
+\qquad 4 \le i \le N-4.
+}
+\label{eq:sbp42_interior}
+\end{equation}
+
+The leading boundary rows are
+\begin{align}
+(\Dzone f)_0 &=
+\frac{1}{h}\left(
+-\frac{24}{17} f_0
++\frac{59}{34} f_1
+-\frac{4}{17} f_2
+-\frac{3}{34} f_3
+\right),
+\\
+(\Dzone f)_1 &=
+\frac{1}{h}\left(
+-\frac{1}{2} f_0
++\frac{1}{2} f_2
+\right),
+\\
+(\Dzone f)_2 &=
+\frac{1}{h}\left(
+\frac{4}{43} f_0
+-\frac{59}{86} f_1
++\frac{59}{86} f_3
+-\frac{4}{43} f_4
+\right),
+\\
+(\Dzone f)_3 &=
+\frac{1}{h}\left(
+\frac{3}{98} f_0
+-\frac{59}{98} f_2
++\frac{32}{49} f_4
+-\frac{4}{49} f_5
+\right),
+\end{align}
+with mirrored rows at the upper boundary. These coefficients satisfy the SBP
+identity \eqref{eq:sbp_identity} exactly.
+
+In the current benchmark, the SBP second derivative is not a separate narrow
+operator with its own optimized closure. Instead, it is the compatible
+energy-form Laplacian induced by the same SBP gradient:
+\begin{equation}
+\boxed{
+{\Dztwo}^{(\mathrm{sbp})}
+=
+-\Hmat_{\mathrm{int}}^{-1}\Gmat^T \Hmat_f \Gmat,
+\qquad
+\Gmat = \Dzone \Emat.
+}
+\label{eq:sbp42_d2}
+\end{equation}
+
+This is a \emph{wide} operator rather than a narrow optimized SBP second
+derivative. Its value is that it is guaranteed dissipative in the SBP norm,
+even if its raw Laplacian accuracy is not spectacular. That is acceptable for a
+first SBP branch whose job is to test whether the instability is tied more to
+boundary-transient structure than to local stencil accuracy.
+
+\subsection{Controlled nonnormality}
+
+The first compact experiment showed why eigenvalues alone are not enough.
+Even if $\mathrm{spec}(B)$ remains entirely in the left half-plane, the solver
+can still suffer large transient amplification if $B$ is strongly nonnormal.
+
+The most useful operator-level indicators are:
+\begin{itemize}[nosep]
+\item the commutator norm
+  $\|B^T B - B B^T\|$,
+\item the eigenvector condition number $\kappa(V)$ for $B = V \Lambda V^{-1}$,
+\item the largest eigenvalue of the symmetric part
+  $\tfrac{1}{2}(B + B^T)$,
+\item the induced amplification in the Neumann reconstruction $\Pmat$.
+\end{itemize}
+
+These quantify how much a stable spectrum can still support large transient
+growth.
+
+\subsection{Good shellwise IMEX conditioning}
+
+Even if $B$ is ugly, the actual implicit stage can still be fine if $A(\kh)$ in
+\eqref{eq:A_shell} stays well-conditioned. This distinction turned out to be
+important in the audit below.
+
+\section{What the First Compact-$D^{(1)}_z$ Experiment Showed}
+
+The first compact experiment replaced the legacy centered second-order
+$\Dzone$ with a fourth-order tridiagonal compact first derivative, while
+leaving the mean-temperature $\Dztwo$ on the old second-order Dirichlet
+Laplacian.
+
+\subsection{What improved}
+
+As a plain derivative approximation, the compact operator behaved exactly as one
+would hope:
+\begin{itemize}[nosep]
+\item for smooth trigonometric probes, the $\partial_z$ error dropped by orders
+  of magnitude relative to the centered second-order stencil,
+\item the reconstructed Neumann derivative for a smooth cosine profile was also
+  dramatically more accurate.
+\end{itemize}
+
+So if one only looks at derivative accuracy, the compact operator appears to be
+an immediate win.
+
+\subsection{What became worse}
+
+The operator audit at $N_z=128$ told a different story. The compact
+$\Dzone$ branch had:
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Metric & centered2 & compact4 \\
+\midrule
+$\|\Dzone\|_{\infty}$ & $5.12\times 10^2$ & $1.74\times 10^3$ \\
+$\|\Pmat\|_{\infty}$ & $1.67$ & $5.32$ \\
+boundary row $\ell^1$ norm & $1.67$ & $5.32$ \\
+$\|B^T B - B B^T\|_2$ & $5.52\times 10^7$ & $4.83\times 10^9$ \\
+$\kappa(V_B)$ & $2.52$ & $2.19\times 10^2$ \\
+$\lambda_{\max}\!\left(\tfrac{B+B^T}{2}\right)$ & $2.68\times 10^2$ & $2.42\times 10^4$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+At the same time:
+\begin{itemize}[nosep]
+\item $\mathrm{Re}\,\lambda(B)$ stayed non-positive to numerical precision,
+\item the shellwise IMEX matrices $A(\kh)$ stayed extremely well-conditioned
+  (condition numbers essentially $1$).
+\end{itemize}
+
+This is a very specific diagnosis:
+\begin{equation}
+\boxed{
+\text{the failure was not caused by a singular IMEX solve;}
+\quad
+\text{it was caused by a much more nonnormal and boundary-amplifying } B.
+}
+\end{equation}
+
+\subsection{Observed run-level consequence}
+
+The FD benchmark with the old centered second-order branch remained finite
+through $t=3.75$ and first produced saved NaNs at $t=4.0$.
+The compact-$\Dzone$ branch, with the old $\Dztwo$ left untouched, produced NaNs by
+$t=2.5$.
+
+So the first compact attempt was a clean negative result, but it was also
+informative. It strongly suggests that the problem is \emph{compatibility of
+the operator family}, not the mere use of compact stencils.
+
+\section{How to Build a Compatible $D^{(2)}_z$}
+
+The next step is to add a second derivative that belongs to the same vertical
+operator family as the compact first derivative, instead of mixing compact
+$\Dzone$ with the old second-order $\Dztwo$.
+
+\subsection{Raw compact second derivative}
+
+The direct analogue of the compact first derivative is a tridiagonal compact
+second derivative on the full grid:
+\begin{equation}
+A_2 f'' = B_2 f,
+\qquad
+\boxed{
+D^{(\mathrm{raw})}_{zz,f} = A_2^{-1} B_2.
+}
+\label{eq:D2_raw_full}
+\end{equation}
+
+For the interior stencil we use the standard fourth-order compact relation
+\begin{equation}
+\frac{1}{10} f''_{j-1} + f''_j + \frac{1}{10} f''_{j+1}
+=
+\frac{6}{5}\,\frac{f_{j-1} - 2f_j + f_{j+1}}{h^2}.
+\label{eq:compact_second_interior}
+\end{equation}
+
+At the boundary, a one-sided closure is constructed by matching polynomials
+through degree $5$:
+\begin{equation}
+f''_0 + 10 f''_1
+=
+\frac{1}{h^2}
+\left(
+\frac{145}{12} f_0
+- \frac{76}{3} f_1
++ \frac{29}{2} f_2
+- \frac{4}{3} f_3
++ \frac{1}{12} f_4
+\right),
+\label{eq:compact_second_boundary}
+\end{equation}
+with the top closure obtained by reflection.
+
+For Dirichlet fields, the interior operator is then restricted by zero
+extension:
+\begin{equation}
+\boxed{
+D^{(\mathrm{raw})}_{zz,\mathrm{dir}}
+=
+S_{\mathrm{int}}\,D^{(\mathrm{raw})}_{zz,f}\,\Emat.
+}
+\label{eq:D2_raw_dir}
+\end{equation}
+
+This branch is valuable because it tells us what the ``classical'' compact
+second derivative does on its own.
+
+\subsection{Energy-compatible second derivative}
+
+The safer branch is the compatibility construction already motivated in
+\eqref{eq:D2_energy}.
+
+Let
+\begin{equation}
+\boxed{
+\Gmat = D^{(1)}_{z,f} \Emat
+}
+\label{eq:G_def}
+\end{equation}
+be the full-grid gradient of a Dirichlet interior field, using the \emph{same}
+full-grid first derivative $D^{(1)}_{z,f}$ as the rest of the compact family.
+
+Let $\Hmat_f$ be the full-grid trapezoidal mass matrix and
+$\Hmat_{\mathrm{int}}$ the interior mass matrix. Then define
+\begin{equation}
+\boxed{
+D^{(\mathrm{energy})}_{zz,\mathrm{dir}}
+=
+- \Hmat_{\mathrm{int}}^{-1}\Gmat^T \Hmat_f \Gmat
+}
+\label{eq:D2_compatible}
+\end{equation}
+
+This is not ``raw compact'' in the Lele sense. It is better viewed as the
+Dirichlet Laplacian \emph{induced by the chosen first derivative and discrete
+inner product}. Its decisive advantage is the exact dissipation identity
+\eqref{eq:energy_dissipation}.
+
+\subsection{Why both branches are worth keeping}
+
+The two branches answer different questions:
+\begin{itemize}[nosep]
+\item \texttt{compact4\_raw}: does a classical compact-$D^{(2)}$ closure fix the
+  mixed-operator pathology?
+\item \texttt{from\_d1\_energy}: if not, does a dissipative operator induced by
+  the same compact gradient cure the incompatibility?
+\end{itemize}
+
+That is a better experiment than jumping directly from the failed first attempt
+to a single new ``improved'' operator with no control comparison.
+
+\section{Audit Checklist for the New $D^{(2)}_z$}
+
+Any candidate $\Dztwo$ should pass the following operator-level checks before a
+long NHQG run:
+\begin{enumerate}[nosep]
+\item $\Dztwo$ is consistent on smooth probes such as $\sin(\pi z)$.
+\item $\mathrm{spec}(\Dztwo)$ has non-positive real part.
+\item $I - \alpha \Dztwo$ is well-conditioned for the relevant implicit
+  coefficients.
+\item The energy form $u^T \Hmat_{\mathrm{int}} \Dztwo u$ is non-positive for the
+  energy-compatible branch, and at least empirically non-positive on random
+  vectors for the raw branch.
+\item The mixed operator $B = D^{(\psi)}_z D^{(D)}_z$ does not become more
+  nonnormal after the full operator family is assembled.
+\item The benchmark run no longer exhibits an earlier blow-up than the legacy
+  centered branch.
+\end{enumerate}
+
+\section{Bottom Line}
+
+The first compact experiment failed for a useful reason:
+\begin{equation}
+\boxed{
+\text{higher local accuracy of } \Dzone
+\;\not\Rightarrow\;
+\text{better semi-discrete NHQG dynamics.}
+}
+\end{equation}
+
+The properties that matter are:
+\begin{itemize}[nosep]
+\item boundary compatibility,
+\item dissipativity of $\Dztwo$,
+\item moderate nonnormality of the coupled operator,
+\item good shellwise conditioning of the IMEX stage solve.
+\end{itemize}
+
+This leads directly to the next implementation strategy:
+\begin{enumerate}[nosep]
+\item keep the compact first derivative,
+\item add both a raw compact and an energy-compatible second derivative,
+\item audit both at the operator level,
+\item only then return to long NHQG benchmark runs.
+\end{enumerate}
+
+\end{document}

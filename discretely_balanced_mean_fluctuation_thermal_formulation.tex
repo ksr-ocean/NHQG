@@ -1,0 +1,1751 @@
+
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{setspace}
+
+\setstretch{1.08}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+}
+
+\title{A Discretely Balanced Mean--Fluctuation Thermal Formulation for NHQGE:\\
+Pedagogical Derivation, Semi-Discrete Exchange Balance,\\
+and a Uniform-Grid Second-Order Finite-Difference Midpoint Scheme}
+\author{}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This note develops, from first principles, a discretely balanced formulation of the coupled fluctuation--mean thermal sector relevant to the NHQGE solver currently under investigation. The goal is not merely to write down a plausible finite-difference approximation, but to design the discrete formulation so that the exchange terms between the fluctuation temperature $\theta$ and the mean temperature deviation $\Theta$ cancel exactly at the semi-discrete level, and continue to do so at the fully discrete level under an appropriate midpoint / Crank--Nicolson time discretization.
+
+The motivation is the following. The recent debugging history indicates that the \texttt{evolve\_mean} branch is physically much more structured and informative than the rapidly diverging \texttt{fixed\_conduction} branch. The \texttt{evolve\_mean} solutions remain coherent and low-shell for a long time, which strongly suggests that the remaining issue is not a generic numerical blowup but rather a subtle imbalance in the coupled thermal pathway. In the current code, the fluctuation-side mean-gradient coupling term $-w\,\partial_z\Theta$ and the mean-side flux-divergence term $-\partial_z\langle w\theta\rangle_{xy}$ are computed through different numerical paths and are time-stepped as explicit RHS contributions. That is algebraically sensible, but it does not force the mean--fluctuation exchange to balance exactly.
+
+This note therefore does five things in a self-contained way. First, it isolates the coupled thermal subsystem that must be treated carefully. Second, it derives the continuous energy-exchange identity that the discrete method should reproduce. Third, it formulates a general discrete design principle using a vertical inner product, a gradient operator, and its discrete adjoint divergence operator. Fourth, it specializes this to a concrete, uniform-grid, second-order finite-difference formulation using a diagonal-norm summation-by-parts structure. Fifth, it derives a practical midpoint / Crank--Nicolson substep, shows its exact fully discrete energy law, and reduces the update to a one-dimensional linear solve for the mean temperature.
+
+A central theme is that the conductive source term $+w$ in the fluctuation-temperature equation is \emph{not} part of the internal mean--fluctuation exchange and should not be forced into a conservative pairing. The exchange-balanced structure is specific to the pair
+\[
+-w\,\partial_z\Theta
+\qquad\text{and}\qquad
+-\partial_z\langle w\theta\rangle_{xy}.
+\]
+Once that pair is isolated and discretized as a matched adjoint pair under the same vertical inner product, the internal thermal exchange is controlled exactly, while mean diffusion remains dissipative. The resulting formulation is simple enough to be used as a baseline numerical test before any return to higher-order compact schemes or more elaborate operator constructions.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction and motivation}
+
+The purpose of this note is to construct a \emph{discretely balanced} formulation of the mean--fluctuation thermal coupling in the NHQGE setting. The phrase ``discretely balanced'' is used in a very specific sense: the discrete approximation should preserve, as exactly as possible, the internal exchange structure between the fluctuation temperature field and the horizontally averaged mean temperature profile. The reason for insisting on this is not aesthetic. It is a targeted response to the behavior of the current solver.
+
+The recent debugging history has strongly suggested that the \texttt{evolve\_mean} branch is not suffering from a generic numerical instability in the usual sense. Instead, it exhibits a coherent, low-shell, slowly developing imbalance. This matters. When a simulation explodes through broad-spectrum contamination, one naturally suspects resolution, aliasing, or timestep issues first. When instead it remains coherent for a long time and is highly sensitive to whether the mean temperature is evolved, the more likely culprit is a subtle inconsistency in the feedback loop that transfers energy between the fluctuation temperature and the mean profile.
+
+The present code already contains much of the correct physics. The total mean temperature is represented as a conduction profile plus a deviation. The fluctuation equation contains the conductive source $+w$ as well as the correction from the evolving mean gradient. The mean equation contains the divergence of the horizontally averaged convective heat flux and a vertical diffusion term. None of this is obviously wrong at the level of formal algebra. The concern is instead that the two exchange terms
+\[
+-w\,\partial_z\Theta
+\qquad\text{and}\qquad
+-\partial_z\langle w\theta\rangle_{xy}
+\]
+are currently assembled through different discrete pathways and are not guaranteed to cancel as a matched pair in a discrete energy budget.
+
+This note is therefore not just about inventing a finite-difference formula. It is about deriving a discretization from the energy structure backward. The correct sequence of questions is:
+
+\begin{enumerate}[label=\arabic*.]
+\item What is the continuous exchange identity between $\theta$ and $\Theta$?
+\item What discrete inner product should replace the continuous vertical integral?
+\item What relationship must hold between the discrete gradient used in $-w\,\partial_z\Theta$ and the discrete divergence used in $-\partial_z\langle w\theta\rangle_{xy}$?
+\item What time discretization preserves that exchange at the fully discrete level?
+\item How can the resulting method be written in a form that is practical to implement?
+\end{enumerate}
+
+The answer will be a simple but powerful rule: the vertical divergence in the mean equation must be the discrete adjoint, under the chosen vertical inner product, of the vertical gradient used in the fluctuation-side coupling term. Once that rule is enforced, the mean--fluctuation exchange becomes a controlled internal transfer rather than a place where discretization error can leak energy.
+
+\section{Full-system predictor--corrector formulation}
+
+The earlier sections isolate the thermal exchange channel because that is the
+part of the solver we are trying to repair. For implementation, however, one
+must place that repair back into the \emph{entire} NHQGE timestep. This section
+does that explicitly.
+
+The practical target is not a monolithic fully implicit solve for the whole
+state vector. That would be much more intrusive than needed. Instead, the goal
+is a stage-wise predictor--corrector method: each IMEX stage first advances a
+reduced system containing the standard $q'$--$w$--$\theta$ linear couplings and
+horizontal nonlinearities, and then applies a balanced thermal corrector for
+the mean--fluctuation exchange sector before the stage is used again.
+
+\subsection{State vector and operator split}
+
+Let the full state be
+\[
+y = (q',w,\theta,\Theta).
+\]
+
+We split the right-hand side into three pieces:
+\[
+\partial_t y = \mathcal E(y) + \mathcal I(y) + \mathcal C(y).
+\]
+
+Here:
+\begin{itemize}
+\item $\mathcal E(y)$ contains the horizontally explicit terms:
+  horizontal advection of $q'$, $w$, and $\theta$, plus the $\beta$ term in the
+  $q'$ equation.
+\item $\mathcal I(y)$ contains the usual linearly stiff IMEX block:
+  the $q'$--$w$ vertical coupling, buoyancy in the $w$ equation, and the
+  conductive source $+w$ in the $\theta$ equation.
+\item $\mathcal C(y)$ contains only the mean--fluctuation thermal correction:
+  \[
+  \mathcal C_\theta = -\,w\,\partial_z \Theta,
+  \qquad
+  \mathcal C_\Theta = \mu\left(-\partial_z\langle w\theta\rangle_{xy}
+  + \kappa_\Theta \partial_{zz}\Theta\right).
+  \]
+\end{itemize}
+
+For the predictor--corrector formulation proposed here, $\mathcal C$ is not
+inserted as a raw explicit RHS. Instead it is represented by a stage-local
+thermal map
+\[
+\mathcal P_\alpha:\ (\theta^\star,\Theta^\star; w^\star)
+\mapsto
+(\theta^+,\Theta^+),
+\]
+where $\alpha$ is the local stage timestep and $w^\star$ is frozen during that
+corrector. The $q'$ and $w$ components are unchanged by $\mathcal P_\alpha$.
+
+So, operationally:
+\begin{itemize}
+\item the predictor advances the reduced system
+  \[
+  \partial_t y = \mathcal E(y) + \mathcal I(y),
+  \]
+  with the mean--exchange terms removed,
+\item the corrector then restores the missing mean--fluctuation thermal
+  coupling on that same stage.
+\end{itemize}
+
+\subsection{The ARS(2,2,2) stage structure}
+
+The production runs of interest use the ARS(2,2,2) IMEX scheme, so that is the
+scheme we write down here. Let
+\[
+\gamma = 1 - \frac{1}{\sqrt{2}},
+\qquad
+\delta = -\frac{\sqrt{2}}{2}.
+\]
+Then the standard two-stage ARS form is
+\begin{align}
+Y_1 &= y^n + \gamma \Delta t\,\mathcal E(y^n)
+      + \gamma \Delta t\,\mathcal I(Y_1),
+\label{eq:ars-stage1-standard}
+\\
+y^{n+1} &= y^n
+ + \Delta t\left[\delta\,\mathcal E(y^n) + (1-\delta)\,\mathcal E(Y_1)\right]
+ + (1-\gamma)\Delta t\,\mathcal I(Y_1)
+ + \gamma \Delta t\,\mathcal I(y^{n+1}).
+\label{eq:ars-stage2-standard}
+\end{align}
+
+If one simply applies a balanced thermal substep \emph{after} the full update,
+then the corrected thermal fields do not participate consistently in the stage
+construction. That is exactly the weakness of the previous split
+implementation.
+
+The new target is therefore a \emph{stage-wise} predictor--corrector version of
+\eqref{eq:ars-stage1-standard}--\eqref{eq:ars-stage2-standard}.
+
+\subsection{Stage 1: reduced predictor followed by thermal corrector}
+
+Define the reduced stage-1 predictor $\widetilde Y_1$ by solving
+\begin{equation}
+\widetilde Y_1
+=
+y^n
++
+\gamma \Delta t\,\mathcal E_{\mathrm{red}}(y^n)
++
+\gamma \Delta t\,\mathcal I_{\mathrm{red}}(\widetilde Y_1),
+\label{eq:stage1-predictor}
+\end{equation}
+where
+\[
+\mathcal E_{\mathrm{red}} = \mathcal E,
+\qquad
+\mathcal I_{\mathrm{red}} = \mathcal I,
+\]
+but with the mean equation and the fluctuation-side mean-gradient coupling
+removed from the core IMEX solve.
+
+Now freeze the stage-1 predictor velocity $w^\star = \widetilde w_1$ and apply
+the balanced SBP2 thermal map over the local stage interval
+\[
+\alpha_1 = \gamma \Delta t.
+\]
+This gives the corrected stage
+\begin{equation}
+Y_1
+=
+\mathcal P_{\alpha_1}(\widetilde Y_1).
+\label{eq:stage1-corrector}
+\end{equation}
+
+The corrector acts only on $(\theta,\Theta)$, so
+\[
+q_1 = \widetilde q_1,
+\qquad
+w_1 = \widetilde w_1.
+\]
+
+For later use in stage 2, it is helpful to define the \emph{effective} stage-1
+thermal correction tendency by
+\begin{equation}
+\mathcal C_1^{\mathrm{eff}}
+=
+\left(
+0,\,
+0,\,
+\frac{\theta_1 - \widetilde\theta_1}{\alpha_1},\,
+\frac{\Theta_1 - \widetilde\Theta_1}{\alpha_1}
+\right).
+\label{eq:C1-eff}
+\end{equation}
+
+This is not an exact Jacobian-based stage solve for the full nonlinear thermal
+operator. It is a predictor--corrector representation of that missing piece.
+The point is that the stage-1 corrected thermal state and its effective
+increment are now available \emph{before} stage 2 is assembled.
+
+\subsection{Stage 2: corrected stage enters the final solve}
+
+The second stage uses the corrected $Y_1$, not the uncorrected
+$\widetilde Y_1$. The reduced predictor $\widetilde Y_2$ is defined by
+\begin{align}
+\widetilde Y_2
+=\;&
+y^n
++
+\Delta t\left[
+\delta\,\mathcal E_{\mathrm{red}}(y^n)
++
+(1-\delta)\,\mathcal E_{\mathrm{red}}(Y_1)
+\right]
+\nonumber\\
+&+
+(1-\gamma)\Delta t\,
+\mathcal I_{\mathrm{red}}(Y_1)
++
+(1-\gamma)\Delta t\,
+\mathcal C_1^{\mathrm{eff}}
++
+\gamma \Delta t\,
+\mathcal I_{\mathrm{red}}(\widetilde Y_2).
+\label{eq:stage2-predictor}
+\end{align}
+
+This formula is the key whole-system reference for the implementation:
+\begin{itemize}
+\item the explicit part uses the corrected stage-1 state $Y_1$,
+\item the reduced implicit part also uses $Y_1$ where the ARS formula requires
+  the previous stage,
+\item and the stage-1 thermal correction is carried into stage 2 with the same
+  ARS weight $(1-\gamma)\Delta t$ that previous-stage implicit contributions
+  would carry.
+\end{itemize}
+
+Then, exactly as in stage 1, freeze the predictor velocity
+\[
+w^\star = \widetilde w_2
+\]
+and apply the stage-2 balanced thermal corrector over
+\[
+\alpha_2 = \gamma \Delta t,
+\]
+obtaining
+\begin{equation}
+y^{n+1} = Y_2 = \mathcal P_{\alpha_2}(\widetilde Y_2).
+\label{eq:stage2-corrector}
+\end{equation}
+
+Again, the corrector changes only the thermal variables:
+\[
+q^{n+1} = \widetilde q_2,
+\qquad
+w^{n+1} = \widetilde w_2.
+\]
+
+\subsection{What the thermal corrector actually solves}
+
+The balanced SBP2 map $\mathcal P_\alpha$ is the one derived later in this
+note, but with the full-step $\Delta t$ replaced by the local stage size
+$\alpha$.
+
+Given predictor thermal data
+\[
+\theta^\star,\qquad \Theta^\star,\qquad w^\star,
+\]
+form on the SBP grid
+\[
+F^\star = \langle w^\star \theta^\star \rangle_{xy},
+\qquad
+M^\star = \mathrm{diag}\!\left(\langle (w^\star)^2 \rangle_{xy}\right).
+\]
+Then solve
+\begin{equation}
+\left[
+I
+- \frac12 \mu \kappa_\Theta \alpha L
+- \frac14 \mu \alpha^2 D_1 M^\star D_1
+\right]\Theta^+
+=
+\left[
+I
++ \frac12 \mu \kappa_\Theta \alpha L
++ \frac14 \mu \alpha^2 D_1 M^\star D_1
+\right]\Theta^\star
+- \mu \alpha\, D_1 F^\star,
+\label{eq:pc-theta-mean}
+\end{equation}
+with strong endpoint Dirichlet conditions, and then update the fluctuation
+temperature by the midpoint rule
+\begin{equation}
+\theta^+
+=
+\theta^\star
+- \alpha\, w^\star \circ
+\left[
+\frac12 D_1(\Theta^\star + \Theta^+)
+\right].
+\label{eq:pc-theta-fluct}
+\end{equation}
+
+In the actual code this is performed after transferring the predictor thermal
+fields from the CGL grid to the uniform SBP work grid, and then transferring
+the corrected fields back.
+
+\subsection{Interpretation}
+
+This formulation should be read as a \emph{stage-consistent predictor--corrector
+repair}, not as an exact fully coupled IRK solve for the whole nonlinear
+system.
+
+Its intended advantages are:
+\begin{itemize}
+\item the corrected thermal state enters stage 2, rather than waiting until the
+  end of the full step,
+\item the stage-1 thermal increment is carried into stage 2 with the correct
+  ARS weight,
+\item the thermal exchange is still handled by the same discretely balanced SBP
+  mechanism,
+\item the rest of the proven $q'$--$w$ IMEX machinery is left as untouched as
+  possible.
+\end{itemize}
+
+This is the full-system formulation that should be used as the common
+mathematical reference when examining the next implementation.
+
+\subsection{What a successful SBP internal audit does and does not prove}
+
+The recent numerical experiments have added an important clarification. When
+the mean--fluctuation exchange is audited \emph{entirely on the SBP work grid},
+using the same SBP norm $H$ and first-derivative operator $D_1$ that appear in
+the thermal corrector itself, the residual is at machine precision up to the
+last finite checkpoint. Symbolically,
+\[
+-(D_1\Theta,F)_H - (\Theta,D_1F)_H \approx 0
+\]
+apart from the boundary term, which is also at roundoff in the tested runs.
+
+This is a strong result, but it is not yet the whole story. It rules out one
+important failure mechanism: the SBP thermal corrector is \emph{not} leaking
+exchange internally on its own grid. However, it still leaves open two
+distinct possibilities for the remaining late-time pathology.
+
+\paragraph{Possibility 1: transfer / monitoring inconsistency.}
+The corrected thermal fields are constructed on the uniform SBP work grid, but
+the rest of the solver and the older diagnostics live on the CGL / Chebyshev
+representation. If we denote by
+\[
+T:\ \text{CGL} \to \text{SBP},
+\qquad
+S:\ \text{SBP} \to \text{CGL},
+\]
+the vertical transfer operators, then the SBP cancellation identity applies to
+the SBP-side fields and operators. By contrast, the older mean-exchange
+diagnostic is evaluated after mapping back to the CGL representation and using
+the CGL differentiation and quadrature machinery. Those two audits will agree
+only if the transfers are sufficiently compatible with the two inner products
+and differentiation operators, schematically through relations of the form
+\[
+M_{\mathrm{CC}} S \approx T^T H,
+\qquad
+G_Z S \approx S D_1.
+\]
+If these compatibility relations fail, then a large CGL-side residual may
+appear even when the SBP substep itself is internally exact.
+
+\paragraph{Possibility 2: inconsistency in the full-step coupling.}
+The SBP proof applies to the isolated thermal corrector with frozen $w$. The
+actual solver is a larger predictor--corrector IMEX method for
+\[
+(q',w,\theta,\Theta),
+\]
+in which the corrected thermal state is transferred back into the Chebyshev /
+CGL representation and then reused by the rest of the ARS stage structure.
+Therefore, even if the isolated thermal map $\mathcal P_\alpha$ is internally
+balanced, the \emph{full} timestep can still leak through splitting errors,
+commutator errors, or a mismatch between the thermal state seen by the
+corrector and the one subsequently used by the rest of the solver.
+
+The practical consequence is important. A near-zero SBP internal residual does
+\emph{not} prove that the whole timestep is now structure-preserving. It proves
+only that the exchange pair is correctly balanced \emph{within the SBP
+corrector itself}. The remaining debugging target is therefore narrowed to the
+representation-transfer layer and the way the corrected thermal state is
+reinserted into the full ARS update.
+
+\subsection{The pulled-back thermal operators seen by the CGL solver}
+
+The cleanest theoretical way to understand the transfer issue is to ask what
+operators the production CGL solver is \emph{effectively} seeing after the SBP
+thermal corrector has been applied and mapped back.
+
+Let
+\[
+\Theta_{\mathrm{S}} = T \Theta_{\mathrm{C}},
+\qquad
+\theta_{\mathrm{S}} = T \theta_{\mathrm{C}},
+\qquad
+w_{\mathrm{S}} = T w_{\mathrm{C}},
+\]
+where the subscripts indicate representation rather than different physical
+fields. If the thermal update is assembled on the SBP grid and then returned to
+CGL, then the fluctuation-side vertical coupling that has actually been applied
+is governed not by the native Chebyshev gradient $G_Z$, but by the pulled-back
+operator
+\begin{equation}
+G_{\mathrm{eff}} = S D_1 T.
+\label{eq:Geff-main}
+\end{equation}
+Likewise, the mean diffusion seen after the map-back is
+\begin{equation}
+L_{\mathrm{eff}} = S L T.
+\label{eq:Leff-main}
+\end{equation}
+
+There is also a naturally induced CGL-side mass matrix, namely the pullback of
+the SBP norm:
+\begin{equation}
+M_{\mathrm{eff}} = T^T H T.
+\label{eq:Meff-main}
+\end{equation}
+This is the inner product in which the transferred SBP thermal corrector is
+most naturally balanced.
+
+Now suppose one wants the returned thermal update to satisfy an exact
+CGL-side exchange identity. Then the corresponding mean-side divergence
+operator cannot be chosen independently. It must be the
+$M_{\mathrm{eff}}$-adjoint of the pulled-back gradient
+\eqref{eq:Geff-main}, up to the boundary term implied by the SBP closure:
+\begin{equation}
+D_{\mathrm{eff}}
+=
+- M_{\mathrm{eff}}^{-1} G_{\mathrm{eff}}^T M_{\mathrm{eff}}
++ B_{\mathrm{eff}}.
+\label{eq:Deff-main}
+\end{equation}
+
+Therefore, if the rest of the solver or the diagnostics instead use the native
+CGL mass $M_{\mathrm{CC}}$, the native CGL gradient $G_Z$, and the native CGL
+mean-divergence operator, then exact CGL-side cancellation can hold only if
+there is strong compatibility between the native operators and the pulled-back
+ones:
+\begin{equation}
+M_{\mathrm{CC}} \approx M_{\mathrm{eff}},
+\qquad
+G_Z \approx G_{\mathrm{eff}},
+\qquad
+D_{\mathrm{CGL}} \approx D_{\mathrm{eff}}.
+\label{eq:compat-summary-main}
+\end{equation}
+
+This is the precise numerical reason that exact roundtrip or exact
+mass-adjointness by themselves are insufficient. Those conditions constrain the
+map $S$ relative to the inner products, but they do not force the returned
+thermal state to have the vertical gradients that the native Chebyshev solver
+expects.
+
+Two more recent experiments sharpen this conclusion.
+
+\paragraph{Mass-compatible transfer alone is not enough.}
+One natural idea is to improve the transfer pair itself. In particular, if one
+chooses a CGL-to-SBP map $T$ and then defines the return map $S$ to satisfy a
+weighted adjoint relation
+\[
+M_{\mathrm{CC}}S = T^T H,
+\]
+then one can make the roundtrip and mass-compatibility defects essentially
+machine precision. This was tested. It did \emph{not} cure the late-time
+behavior. The important reason is that the derivative-intertwining defects
+\[
+G_Z S - S D_1,
+\qquad
+D_1 T - T G_Z
+\]
+remained order one. So exact roundtrip and exact mass compatibility, by
+themselves, are not enough if the corrected thermal state is handed back to the
+rest of the solver with a substantially different vertical gradient structure.
+
+\paragraph{Corrector subcycling is informative but not decisive on its own.}
+Another natural idea is to refine only the inserted thermal corrector, rather
+than the whole IMEX step. If the local stage size is $\alpha$, define a
+subcycled corrector by
+\[
+\mathcal P_\alpha^{(m)}
+=
+\underbrace{
+\mathcal P_{\alpha/m}
+\circ \cdots \circ
+\mathcal P_{\alpha/m}
+}_{m\ \text{times}}.
+\]
+This introduces a new numerical question: is the remaining failure sensitive to
+how the balanced thermal map is time-resolved \emph{inside} the ARS stage, as
+opposed to being a generic global timestep / CFL issue?
+
+The recent experiments indicate that subcycling can reduce certain
+reconstructed CGL-side residuals in local replay tests, but it is not, by
+itself, a complete cure. A restart begun very late in the dangerous window can
+still become violent quickly even with $m=4$. So subcycling is a useful probe
+of stage coupling, but not yet a final remedy.
+
+The numerical reason is that subcycling improves only the approximation of the
+isolated thermal factor. If one writes, schematically,
+\[
+\mathcal P_\alpha \approx \exp(\alpha \mathcal C)
+\]
+for the inserted thermal repair and
+\[
+\Phi_{\mathrm{red},\alpha}
+\]
+for the reduced predictor over the same stage interval, then the actual stage
+map is a composition of the form
+\[
+\Psi_\alpha = \mathcal P_\alpha \circ \Phi_{\mathrm{red},\alpha},
+\]
+or, in the full ARS setting, a repeated composition of such reduced predictors
+and thermal repairs. Replacing $\mathcal P_\alpha$ by
+\[
+\mathcal P_\alpha^{(m)} = \left(\mathcal P_{\alpha/m}\right)^m
+\]
+reduces the discretization error of the thermal factor itself, but it does not
+remove the splitting error associated with the noncommutation of the reduced
+dynamics and the thermal repair. Formally, one still expects local truncation
+contributions involving commutator terms such as
+\[
+[\mathcal A_{\mathrm{red}},\mathcal C].
+\]
+This is why subcycling can improve local diagnostics without necessarily
+stabilizing the full long-time branch.
+
+\paragraph{Restart timing is now itself a diagnostic.}
+An especially important new observation is that the behavior can depend
+strongly on \emph{where} the restart is taken. A restart launched directly from
+a later checkpoint can look immediately pathological, while the same method
+launched a little earlier and evolved through the overlapping time interval can
+remain comparatively calm. This means the later restart state may already be
+contaminated, even if it is still finite. Therefore the onset window should no
+longer be diagnosed using only one restart time. One must now compare
+overlapping replays begun from a sequence of earlier checkpoints.
+
+There is also a precise numerical interpretation of this. Suppose one compares
+an old branch $\Psi^{\mathrm{old}}$ with a modified branch
+$\Psi^{\mathrm{new}}$. If a run is restarted with the new scheme from a
+checkpoint produced by the old scheme at time $t_b$, then it is not starting
+from a state on its own numerical trajectory. Rather,
+\[
+y_b^{\mathrm{old}}
+=
+y_b^{\mathrm{new}} + \delta_b,
+\]
+where $\delta_b$ is the accumulated discrepancy between the two discrete
+evolutions up to the handoff time. In a sensitive late-time regime, even a
+moderate $\delta_b$ can act as a large effective perturbation for the new
+branch.
+
+So a late branch-switch restart is not a neutral test of the modified method.
+It is a test of that method from an initial state already shaped by the older
+discretization. This is why overlapping replays from earlier checkpoints are
+now part of the numerical theory rather than merely an implementation
+convenience.
+
+\section{The thermal subsystem to be balanced}
+
+We begin by isolating the thermal sector. The full NHQGE system contains $q'$, $w$, $\theta$, and the mean temperature deviation. However, for the exchange-balance problem, the essential subsystem is the coupled pair $(\theta,\Theta)$, with $w$ acting as a coefficient field provided by the rest of the dynamics.
+
+Let $\Theta(z,t)$ denote the deviation of the mean temperature profile from pure conduction, so that the total mean temperature is
+\[
+\Theta_{\mathrm{tot}}(z,t) = 1 - z + \Theta(z,t).
+\]
+Then the fluctuation-temperature equation can be written schematically as
+\begin{equation}
+\partial_t \theta
+=
+\mathcal R_\theta
++
+w
+-
+w\,\partial_z\Theta,
+\label{eq:theta-schematic}
+\end{equation}
+where $\mathcal R_\theta$ contains whatever horizontal advection, horizontal diffusion, and other terms are not under discussion here.
+
+The mean equation is written as
+\begin{equation}
+\partial_t \Theta
+=
+\mu
+\left(
+-\partial_z F
++
+\kappa_\Theta \partial_{zz}\Theta
+\right),
+\qquad
+F(z,t) = \langle w\theta\rangle_{xy},
+\label{eq:mean-schematic}
+\end{equation}
+where $\mu$ is the slow-time coefficient (in the current code it corresponds to \texttt{mean\_temp\_eps\_sq}), and
+\[
+\kappa_\Theta = \sigma^{-1}
+\]
+in the simplest nondimensional form.
+
+It is crucial to separate the roles of the various terms in \eqref{eq:theta-schematic} and \eqref{eq:mean-schematic}:
+
+\begin{itemize}
+\item The term $+w$ in the $\theta$ equation is an external conductive source. It is not an internal exchange with the mean deviation $\Theta$.
+\item The pair
+\[
+-w\,\partial_z\Theta
+\qquad\text{and}\qquad
+-\partial_z\langle w\theta\rangle_{xy}
+\]
+is the internal mean--fluctuation thermal exchange.
+\item The vertical diffusion term in the mean equation is dissipative and should reduce a suitable mean-profile energy.
+\end{itemize}
+
+This distinction matters because one should \emph{not} try to force the conductive source $+w$ into a conservative pairing. Doing so would muddle the structure. The correct target is to make only the internal exchange pair cancel exactly.
+
+\section{Continuous exchange balance}
+
+Before designing any discrete scheme, it is helpful to recall the continuous energy identity. Define the fluctuation thermal energy by
+\[
+E_\theta
+=
+\frac12
+\int_0^1
+\langle \theta^2 \rangle_{xy}
+\,dz
+\]
+and the mean-profile energy by
+\[
+E_\Theta
+=
+\frac{1}{2\mu}
+\int_0^1
+\Theta^2
+\,dz.
+\]
+
+We are interested only in the exchange contribution from the pair
+\[
+-w\,\partial_z\Theta
+\qquad\text{and}\qquad
+-\partial_z F.
+\]
+
+\subsection{Fluctuation-side contribution}
+
+Multiply the exchange term in the $\theta$ equation by $\theta$ and average horizontally and vertically:
+\[
+\frac{dE_\theta}{dt}\Big|_{\mathrm{exch}}
+=
+\int_0^1
+\left\langle
+\theta\,
+(-w\,\partial_z\Theta)
+\right\rangle_{xy}
+\,dz.
+\]
+Because $\Theta$ depends only on $z$, this becomes
+\begin{equation}
+\frac{dE_\theta}{dt}\Big|_{\mathrm{exch}}
+=
+-
+\int_0^1
+\langle w\theta\rangle_{xy}\,
+\partial_z\Theta
+\,dz
+=
+-
+\int_0^1
+F\,\partial_z\Theta
+\,dz.
+\label{eq:Etheta-cont}
+\end{equation}
+
+\subsection{Mean-side contribution}
+
+Now take the mean equation and multiply by $\Theta/\mu$:
+\[
+\frac{1}{\mu}\Theta\,\partial_t\Theta
+=
+-\Theta\,\partial_z F
++
+\kappa_\Theta \Theta\,\partial_{zz}\Theta.
+\]
+Integrating in $z$, the exchange contribution is
+\begin{equation}
+\frac{dE_\Theta}{dt}\Big|_{\mathrm{exch}}
+=
+-
+\int_0^1
+\Theta\,\partial_z F
+\,dz.
+\label{eq:ETheta-cont-raw}
+\end{equation}
+Integrating by parts,
+\[
+-
+\int_0^1
+\Theta\,\partial_z F
+\,dz
+=
+\int_0^1
+F\,\partial_z\Theta
+\,dz
+-
+\left[\Theta F\right]_{0}^{1}.
+\]
+Hence
+\begin{equation}
+\frac{dE_\Theta}{dt}\Big|_{\mathrm{exch}}
+=
+\int_0^1
+F\,\partial_z\Theta
+\,dz
+-
+\left[\Theta F\right]_{0}^{1}.
+\label{eq:ETheta-cont}
+\end{equation}
+
+\subsection{Cancellation}
+
+Combining \eqref{eq:Etheta-cont} and \eqref{eq:ETheta-cont} gives
+\[
+\frac{d}{dt}(E_\theta + E_\Theta)\Big|_{\mathrm{exch}}
+=
+-
+\left[\Theta F\right]_{0}^{1}.
+\]
+Thus if either
+\[
+\Theta(0)=\Theta(1)=0
+\]
+or
+\[
+F(0)=F(1)=0,
+\]
+the internal exchange cancels exactly:
+\begin{equation}
+\frac{d}{dt}(E_\theta + E_\Theta)\Big|_{\mathrm{exch}} = 0.
+\label{eq:continuous-exchange-cancel}
+\end{equation}
+
+This is the structure we want to reproduce discretely.
+
+\section{General discrete design principle}
+
+We now formulate the discrete analogue in a way that is independent of the specific finite-difference stencil. This is the most important conceptual step.
+
+\subsection{Vertical inner product}
+
+Let the vertical grid consist of nodes
+\[
+z_i, \qquad i=0,\dots,N,
+\]
+not necessarily uniform. Let
+\[
+H = \mathrm{diag}(h_0,\dots,h_N)
+\]
+be a positive definite diagonal mass matrix representing the vertical quadrature weights.
+
+For mean profiles $u,v\in\mathbb R^{N+1}$, define the discrete vertical inner product
+\[
+(u,v)_H = u^T H v.
+\]
+
+For fields depending also on horizontal coordinates, define
+\[
+\langle a,b\rangle_H
+=
+\sum_{i=0}^N h_i\,\langle a_i b_i\rangle_{xy},
+\]
+where $\langle\cdot\rangle_{xy}$ denotes the horizontally averaged inner product at each level.
+
+\subsection{Gradient and divergence operators}
+
+Let
+\[
+G:\ \Theta \mapsto \text{discrete vertical gradient used in } -w\,G\Theta
+\]
+and
+\[
+D:\ F \mapsto \text{discrete vertical divergence used in } -D F.
+\]
+
+The fundamental design requirement is that $G$ and $D$ satisfy a discrete integration-by-parts identity:
+\begin{equation}
+(u, Df)_H + (Gu, f)_H = u^T B f,
+\label{eq:discrete-ibp}
+\end{equation}
+where $B$ is the boundary form. For the standard two-endpoint boundary term this is
+\[
+B = e_N e_N^T - e_0 e_0^T.
+\]
+
+Equation \eqref{eq:discrete-ibp} is the discrete counterpart of
+\[
+\int_0^1 u\,\partial_z f\,dz + \int_0^1 (\partial_z u)\,f\,dz = [u f]_0^1.
+\]
+
+It can be rewritten as
+\begin{equation}
+D = -H^{-1} G^T H + H^{-1} B.
+\label{eq:D-adjoint}
+\end{equation}
+
+This is the key rule: once the gradient $G$ used in the fluctuation equation is chosen, the divergence $D$ in the mean equation should not be invented independently. It should be the discrete adjoint of $G$ under the $H$ inner product, up to the boundary term.
+
+\subsection{General semi-discrete formulation}
+
+With this notation, the semi-discrete thermal exchange subsystem is
+\begin{equation}
+\partial_t \theta = -\,w \circ (G\Theta),
+\label{eq:theta-semi}
+\end{equation}
+\begin{equation}
+\partial_t \Theta = \mu\left(-D F + \kappa_\Theta L\Theta\right),
+\qquad
+F_i = \langle w_i \theta_i\rangle_{xy},
+\label{eq:Theta-semi}
+\end{equation}
+where $L$ is the discrete mean-diffusion operator and $\circ$ denotes pointwise multiplication in the vertical index.
+
+The semi-discrete fluctuation energy is
+\[
+E_\theta^h = \frac12 \langle \theta,\theta\rangle_H,
+\]
+and the semi-discrete mean energy is
+\[
+E_\Theta^h = \frac{1}{2\mu}(\Theta,\Theta)_H.
+\]
+
+Then
+\[
+\frac{dE_\theta^h}{dt}
+=
+-
+(F,G\Theta)_H
+\]
+and
+\[
+\frac{dE_\Theta^h}{dt}
+=
+-(\Theta,DF)_H
++
+\kappa_\Theta (\Theta,L\Theta)_H.
+\]
+Using \eqref{eq:discrete-ibp},
+\[
+(\Theta,DF)_H = -(G\Theta,F)_H + \Theta^T B F,
+\]
+so
+\begin{equation}
+\frac{d}{dt}(E_\theta^h + E_\Theta^h)
+=
+-\Theta^T B F
++
+\kappa_\Theta(\Theta,L\Theta)_H.
+\label{eq:semi-disc-energy}
+\end{equation}
+
+Therefore, if the boundary term vanishes, the internal exchange cancels exactly and only mean diffusion remains.
+
+This is the central semi-discrete result.
+
+\section{Concrete specialization: uniform-grid second-order finite differences}
+
+We now specialize the general framework to the simplest practical baseline: a uniform grid and a second-order diagonal-norm summation-by-parts operator.
+
+\subsection{Grid and mass matrix}
+
+Take
+\[
+z_i = i\Delta z,
+\qquad i=0,\dots,N,
+\qquad
+\Delta z = \frac{1}{N}.
+\]
+
+Define the mass matrix
+\begin{equation}
+H
+=
+\Delta z\,
+\mathrm{diag}\!\left(\frac12,1,\dots,1,\frac12\right).
+\label{eq:H-sbp2}
+\end{equation}
+
+This corresponds to the trapezoidal rule on the uniform node grid.
+
+\subsection{First derivative}
+
+The standard second-order diagonal-norm SBP first derivative is
+\begin{equation}
+D_1
+=
+\frac{1}{2\Delta z}
+\begin{bmatrix}
+-2 & 2 & 0 & 0 & \cdots & 0 \\
+-1 & 0 & 1 & 0 & \cdots & 0 \\
+0 & -1 & 0 & 1 & \cdots & 0 \\
+\vdots & & \ddots & \ddots & \ddots & \vdots \\
+0 & \cdots & 0 & -1 & 0 & 1 \\
+0 & \cdots & 0 & 0 & -2 & 2
+\end{bmatrix}.
+\label{eq:D1-sbp2}
+\end{equation}
+
+This operator satisfies
+\begin{equation}
+H D_1 + D_1^T H = B,
+\qquad
+B = \mathrm{diag}(-1,0,\dots,0,1).
+\label{eq:sbp-identity}
+\end{equation}
+
+Thus $D_1$ plays both roles in the simplest baseline: it is the gradient in the fluctuation equation and the divergence in the mean equation.
+
+\subsection{Boundary conditions}
+
+For the baseline test, impose homogeneous Dirichlet conditions strongly:
+\begin{equation}
+\Theta_0 = \Theta_N = 0,
+\qquad
+\theta_0 = \theta_N = 0.
+\label{eq:dirichlet-bc}
+\end{equation}
+
+If the vertical velocity also vanishes at the endpoints,
+\[
+w_0 = w_N = 0,
+\]
+then the heat flux
+\[
+F_i = \langle w_i\theta_i\rangle_{xy}
+\]
+also vanishes at the boundaries. In practice, the vanishing of either $\Theta$ or $F$ at the endpoints is enough to remove the boundary contribution in the exchange balance.
+
+\subsection{Mean diffusion operator}
+
+For the mean diffusion, use the standard second-order Laplacian
+\begin{equation}
+L
+=
+\frac{1}{\Delta z^2}
+\begin{bmatrix}
+0 & 0 & 0 & \cdots & 0 \\
+1 & -2 & 1 & \cdots & 0 \\
+0 & 1 & -2 & \ddots & \vdots \\
+\vdots & & \ddots & \ddots & 1 \\
+0 & \cdots & 0 & 0 & 0
+\end{bmatrix},
+\label{eq:L-second-order}
+\end{equation}
+with the endpoint rows set to zero because the Dirichlet conditions are enforced directly.
+
+The important point is that the mean diffusion operator does \emph{not} need to be the same stencil as the coupling derivative. It only needs to be dissipative:
+\[
+(\Theta,L\Theta)_H \le 0
+\]
+for Dirichlet data. This is true for the standard centered Laplacian.
+
+\section{Semi-discrete energy law for the concrete finite-difference scheme}
+
+Using the operators above, define the semi-discrete exchange system
+\begin{equation}
+\partial_t \theta_i
+=
+-\,w_i (D_1\Theta)_i,
+\label{eq:theta-semi-fd}
+\end{equation}
+\begin{equation}
+\partial_t \Theta
+=
+\mu\left(
+- D_1 F
++ \kappa_\Theta L\Theta
+\right),
+\qquad
+F_i = \langle w_i\theta_i\rangle_{xy}.
+\label{eq:Theta-semi-fd}
+\end{equation}
+
+Let the discrete energies be
+\begin{equation}
+E_\theta^h
+=
+\frac12
+\sum_{i=0}^N
+h_i \,\langle \theta_i^2\rangle_{xy},
+\label{eq:Etheta-h}
+\end{equation}
+\begin{equation}
+E_\Theta^h
+=
+\frac{1}{2\mu}
+\sum_{i=0}^N
+h_i \,\Theta_i^2.
+\label{eq:ETheta-h}
+\end{equation}
+
+Then
+\[
+\frac{dE_\theta^h}{dt}
+=
+-
+\sum_{i=0}^N
+h_i\,\langle \theta_i w_i\rangle_{xy}\,(D_1\Theta)_i
+=
+-(F,D_1\Theta)_H.
+\]
+And
+\[
+\frac{dE_\Theta^h}{dt}
+=
+-(\Theta,D_1F)_H
++
+\kappa_\Theta(\Theta,L\Theta)_H.
+\]
+
+Using the SBP identity,
+\[
+(\Theta,D_1F)_H
+=
+-(D_1\Theta,F)_H + \Theta^T B F.
+\]
+Hence
+\[
+\frac{d}{dt}(E_\theta^h + E_\Theta^h)
+=
+-\Theta^T B F
++
+\kappa_\Theta(\Theta,L\Theta)_H.
+\]
+
+Under the boundary conditions \eqref{eq:dirichlet-bc}, the boundary term vanishes, and therefore
+\begin{equation}
+\frac{d}{dt}(E_\theta^h + E_\Theta^h)
+=
+\kappa_\Theta(\Theta,L\Theta)_H
+\le 0.
+\label{eq:semi-energy-final}
+\end{equation}
+
+This shows that the internal mean--fluctuation exchange is exactly neutral at the semi-discrete level, while mean diffusion is dissipative.
+
+\section{Why semi-discrete balance alone is not enough}
+
+One might think that \eqref{eq:semi-energy-final} solves the problem completely. It does not. A semi-discrete energy law is necessary, but not sufficient. If the exchange terms are advanced separately and explicitly in time, the balance can be broken at the fully discrete level by the time discretization itself. Over long integrations, that can still create a secular drift.
+
+This point is particularly relevant here because the current solver already treats different pieces of the thermal system in different ways: the conductive source appears in an implicit block, while the mean-gradient correction and mean-flux divergence are explicit stage contributions. Such a split is natural from an IMEX point of view, but it gives the stabilizing mean-feedback loop a looser temporal treatment than the destabilizing conductive source.
+
+The remedy is to time-discretize the internal exchange pair together in a matched way. The simplest robust choice is a midpoint / Crank--Nicolson substep with the vertical velocity frozen at a stage value.
+
+\section{Fully discrete midpoint / Crank--Nicolson exchange-balanced substep}
+
+Let $w^\star$ be a frozen stage value of the vertical velocity over the thermal exchange substep. Consider
+\begin{equation}
+\frac{\theta^{n+1}-\theta^n}{\Delta t}
+=
+-\,w^\star \circ D_1\Theta^{n+\frac12},
+\label{eq:theta-midpoint}
+\end{equation}
+\begin{equation}
+\frac{\Theta^{n+1}-\Theta^n}{\Delta t}
+=
+\mu
+\left(
+- D_1 F^{n+\frac12}
++
+\kappa_\Theta L\Theta^{n+\frac12}
+\right),
+\label{eq:Theta-midpoint}
+\end{equation}
+where
+\[
+\Theta^{n+\frac12} = \frac12(\Theta^{n+1}+\Theta^n),
+\qquad
+\theta^{n+\frac12} = \frac12(\theta^{n+1}+\theta^n),
+\]
+and the midpoint heat flux is
+\begin{equation}
+F_i^{n+\frac12}
+=
+\left\langle
+w_i^\star \,\theta_i^{n+\frac12}
+\right\rangle_{xy}.
+\label{eq:F-half}
+\end{equation}
+
+\subsection{Fully discrete energy law}
+
+Take the discrete $H$ inner product of \eqref{eq:theta-midpoint} with $\theta^{n+1/2}$. Using
+\[
+(\theta^{n+1}-\theta^n,\theta^{n+\frac12})_H
+=
+\frac12\left(
+\|\theta^{n+1}\|_H^2 - \|\theta^n\|_H^2
+\right),
+\]
+we obtain
+\begin{equation}
+\frac{1}{2\Delta t}
+\left(
+\|\theta^{n+1}\|_H^2 - \|\theta^n\|_H^2
+\right)
+=
+-
+(F^{n+\frac12},D_1\Theta^{n+\frac12})_H.
+\label{eq:theta-energy-mid}
+\end{equation}
+
+Similarly, take the $H$ inner product of \eqref{eq:Theta-midpoint} with $\Theta^{n+1/2}/\mu$. This gives
+\begin{equation}
+\frac{1}{2\mu\Delta t}
+\left(
+\|\Theta^{n+1}\|_H^2 - \|\Theta^n\|_H^2
+\right)
+=
+-
+(\Theta^{n+\frac12},D_1F^{n+\frac12})_H
++
+\kappa_\Theta
+(\Theta^{n+\frac12},L\Theta^{n+\frac12})_H.
+\label{eq:Theta-energy-mid}
+\end{equation}
+
+Using the SBP identity again,
+\[
+(\Theta^{n+\frac12},D_1F^{n+\frac12})_H
+=
+-
+(D_1\Theta^{n+\frac12},F^{n+\frac12})_H
++
+(\Theta^{n+\frac12})^T B F^{n+\frac12}.
+\]
+Combining this with \eqref{eq:theta-energy-mid} and \eqref{eq:Theta-energy-mid}, we obtain
+\begin{equation}
+\frac{1}{2\Delta t}
+\left(
+\|\theta^{n+1}\|_H^2 - \|\theta^n\|_H^2
+\right)
++
+\frac{1}{2\mu\Delta t}
+\left(
+\|\Theta^{n+1}\|_H^2 - \|\Theta^n\|_H^2
+\right)
+=
+-
+(\Theta^{n+\frac12})^T B F^{n+\frac12}
++
+\kappa_\Theta
+(\Theta^{n+\frac12},L\Theta^{n+\frac12})_H.
+\label{eq:full-discrete-balance-prebc}
+\end{equation}
+
+Under homogeneous Dirichlet boundary conditions, the boundary contribution vanishes, and therefore
+\begin{equation}
+\frac{1}{2\Delta t}
+\left(
+\|\theta^{n+1}\|_H^2 - \|\theta^n\|_H^2
+\right)
++
+\frac{1}{2\mu\Delta t}
+\left(
+\|\Theta^{n+1}\|_H^2 - \|\Theta^n\|_H^2
+\right)
+=
+\kappa_\Theta
+(\Theta^{n+\frac12},L\Theta^{n+\frac12})_H
+\le 0.
+\label{eq:full-discrete-balance}
+\end{equation}
+
+This is the desired fully discrete energy law: the internal exchange cancels exactly, and only mean diffusion can change the sum of the two energies.
+
+\section{Reduction to a one-dimensional linear solve}
+
+At first glance, the midpoint system appears nonlinear because the heat flux involves the midpoint fluctuation temperature. Fortunately, it reduces neatly to a one-dimensional linear solve.
+
+\subsection{Midpoint fluctuation temperature}
+
+From \eqref{eq:theta-midpoint},
+\[
+\theta^{n+1}
+=
+\theta^n
+-
+\Delta t\,
+w^\star \circ D_1\Theta^{n+\frac12}.
+\]
+Therefore
+\begin{equation}
+\theta^{n+\frac12}
+=
+\theta^n
+-
+\frac{\Delta t}{2}\,
+w^\star \circ D_1\Theta^{n+\frac12}.
+\label{eq:theta-half-explicit}
+\end{equation}
+
+\subsection{Midpoint heat flux}
+
+Substitute \eqref{eq:theta-half-explicit} into the definition of the midpoint heat flux:
+\[
+F_i^{n+\frac12}
+=
+\left\langle
+w_i^\star \theta_i^n
+\right\rangle_{xy}
+-
+\frac{\Delta t}{2}
+\left\langle
+(w_i^\star)^2
+\right\rangle_{xy}
+(D_1\Theta^{n+\frac12})_i.
+\]
+
+Define
+\begin{equation}
+F_i^n := \left\langle w_i^\star \theta_i^n \right\rangle_{xy},
+\label{eq:F-n}
+\end{equation}
+\begin{equation}
+m_i^\star := \left\langle (w_i^\star)^2 \right\rangle_{xy},
+\qquad
+M^\star := \mathrm{diag}(m_0^\star,\dots,m_N^\star).
+\label{eq:m-star}
+\end{equation}
+Then
+\begin{equation}
+F^{n+\frac12}
+=
+F^n
+-
+\frac{\Delta t}{2}
+M^\star D_1 \Theta^{n+\frac12}.
+\label{eq:F-half-linearized}
+\end{equation}
+
+\subsection{Mean update}
+
+Insert \eqref{eq:F-half-linearized} into \eqref{eq:Theta-midpoint}:
+\[
+\frac{\Theta^{n+1}-\Theta^n}{\Delta t}
+=
+\mu
+\left[
+- D_1 F^n
++
+\frac{\Delta t}{2}
+D_1 M^\star D_1 \Theta^{n+\frac12}
++
+\kappa_\Theta L\Theta^{n+\frac12}
+\right].
+\]
+Now use
+\[
+\Theta^{n+\frac12} = \frac12(\Theta^{n+1}+\Theta^n).
+\]
+After rearrangement, this becomes
+\begin{equation}
+A_\Theta \Theta^{n+1} = b_\Theta,
+\label{eq:Ath-theta}
+\end{equation}
+with
+\begin{equation}
+A_\Theta
+=
+I
+-
+\frac{\mu \kappa_\Theta \Delta t}{2}L
+-
+\frac{\mu \Delta t^2}{4} D_1 M^\star D_1,
+\label{eq:ATheta}
+\end{equation}
+and
+\begin{equation}
+b_\Theta
+=
+\left(
+I
++
+\frac{\mu \kappa_\Theta \Delta t}{2}L
++
+\frac{\mu \Delta t^2}{4} D_1 M^\star D_1
+\right)\Theta^n
+-
+\mu\Delta t\, D_1 F^n.
+\label{eq:bTheta}
+\end{equation}
+
+This is only a one-dimensional linear solve in the vertical coordinate.
+
+\subsection{Fluctuation update}
+
+Once $\Theta^{n+1}$ is known, $\theta^{n+1}$ follows from
+\begin{equation}
+\theta^{n+1}
+=
+\theta^n
+-
+\frac{\Delta t}{2}
+w^\star \circ
+D_1(\Theta^{n+1}+\Theta^n).
+\label{eq:theta-update-final}
+\end{equation}
+
+Thus the entire exchange-balanced midpoint substep is cheap: a 1D solve for the mean profile plus a direct update for the fluctuation temperature.
+
+\section{What is and is not part of the balanced substep}
+
+A crucial conceptual point is that the exchange-balanced midpoint substep should only contain the internal mean--fluctuation exchange and the mean diffusion. It should \emph{not} contain the conductive source $+w$ in the fluctuation temperature equation.
+
+This motivates the following split of the thermal update:
+
+\begin{enumerate}[label=(\Alph*)]
+\item \textbf{Balanced exchange + mean diffusion:}
+\[
+\theta_t = -w\,\partial_z\Theta,
+\qquad
+\Theta_t = \mu(-\partial_z\langle w\theta\rangle_{xy} + \kappa_\Theta \partial_{zz}\Theta).
+\]
+This is the part treated by the balanced midpoint substep.
+
+\item \textbf{Conductive source:}
+\[
+\theta_t = w.
+\]
+This is an external source term. It may continue to be treated in whatever implicit block is already convenient.
+
+\item \textbf{Horizontal advection and horizontal dissipation:}
+all remaining terms not involving the exchange pair.
+\end{enumerate}
+
+The mathematical reason for this split is simple: only the pair in (A) corresponds to an internal energy exchange between $\theta$ and $\Theta$. The conductive source in (B) is not part of that exchange.
+
+\section{How this connects back to the current solver architecture}
+
+The present solver already treats the thermal sector in a split way. The mean-gradient feedback in the fluctuation temperature equation is assembled explicitly. The mean-flux divergence in the mean equation is also assembled explicitly. The conductive source appears in the implicit tendency. The mean diffusion is treated in a separate one-dimensional implicit solve. This existing separation is actually an advantage for testing the new formulation: one can replace the current explicit mean-coupling path and the current mean-profile update by the exchange-balanced midpoint substep without rewriting the entire solver.
+
+The cleanest implementation strategy is therefore:
+
+\begin{enumerate}[label=\arabic*.]
+\item Keep the existing $q$--$w$ infrastructure.
+\item Keep the existing treatment of the conductive source $+w$.
+\item Keep the existing horizontal advection and horizontal dissipation machinery.
+\item Replace the present explicit mean-coupling terms
+\[
+-w\,\partial_z\Theta
+\qquad\text{and}\qquad
+-\mu\,\partial_z\langle w\theta\rangle_{xy}
+\]
+together with the separate mean-diffusion solve, by the exchange-balanced midpoint substep described above.
+\end{enumerate}
+
+This makes the experiment both more focused and easier to interpret. If the long-time instability is significantly altered or removed, then the culprit really was the imbalance in the mean-coupling pathway. If not, one has ruled out one of the most plausible remaining structural problems.
+
+\section{Why the same horizontal averaging path must be used everywhere}
+
+The balanced formulation assumes that the heat flux
+\[
+F_i = \langle w_i\theta_i\rangle_{xy}
+\]
+is a single, well-defined object. In practice, this means the same horizontal product-and-average path should be used in
+
+\begin{itemize}
+\item the mean equation,
+\item the balanced midpoint thermal substep,
+\item the Nusselt number or convective-flux diagnostic,
+\item any budget diagnostics that attempt to monitor the thermal exchange.
+\end{itemize}
+
+This is not a minor implementation detail. If different code paths are used for the same nominal flux, then the diagnostic system is no longer tracking the same object that the solver is evolving. That creates interpretive ambiguity and can mask or mimic energy-budget problems. In the present debugging context, where the mean-fluctuation exchange is the main suspect, such ambiguity is especially undesirable.
+
+Therefore, when implementing the baseline finite-difference test, one should define the horizontally averaged heat flux operator once and reuse it everywhere.
+
+\section{Diagnostic residual for the balanced substep}
+
+Because the balanced midpoint substep has an exact fully discrete energy law, it naturally provides a sharp diagnostic residual.
+
+Define
+\begin{equation}
+R_{\mathrm{bal}}
+=
+\frac{1}{2\Delta t}
+\left(
+\|\theta^{n+1}\|_H^2 - \|\theta^n\|_H^2
+\right)
++
+\frac{1}{2\mu\Delta t}
+\left(
+\|\Theta^{n+1}\|_H^2 - \|\Theta^n\|_H^2
+\right)
+-
+\kappa_\Theta
+(\Theta^{n+\frac12},L\Theta^{n+\frac12})_H.
+\label{eq:Rbal}
+\end{equation}
+
+For a correctly implemented balanced midpoint substep, one should have
+\[
+R_{\mathrm{bal}} \approx 0
+\]
+up to solver tolerance and floating-point roundoff.
+
+This residual is extremely valuable. It provides a hard regression target. If the baseline finite-difference implementation of the balanced thermal substep does \emph{not} satisfy this identity to high accuracy, then the implementation is wrong. If it does satisfy the identity and the global simulation still eventually diverges, then the mean--fluctuation exchange imbalance hypothesis has been tested very severely.
+
+\section{Pedagogical summary of the construction}
+
+It is helpful to condense the derivation into a conceptual recipe.
+
+\subsection*{Step 1: isolate the internal exchange}
+
+The only terms that should cancel internally are
+\[
+-w\,\partial_z\Theta
+\qquad\text{and}\qquad
+-\partial_z\langle w\theta\rangle_{xy}.
+\]
+The conductive source $+w$ is external and should not be forced into a conservative pairing.
+
+\subsection*{Step 2: choose the vertical inner product}
+
+Pick a vertical mass matrix $H$ that represents the discrete integral in $z$.
+
+\subsection*{Step 3: choose the gradient used in the fluctuation equation}
+
+Whatever discrete gradient operator $G$ is used in $-w\,G\Theta$ defines the fluctuation-side coupling.
+
+\subsection*{Step 4: define the divergence by adjointness}
+
+The divergence in the mean equation should be
+\[
+D = -H^{-1}G^T H + H^{-1}B.
+\]
+This is the discrete analogue of integration by parts.
+
+\subsection*{Step 5: make mean diffusion dissipative}
+
+The mean-diffusion operator $L$ need only satisfy
+\[
+(\Theta,L\Theta)_H \le 0
+\]
+for the intended boundary conditions. It does not need to share the same stencil as $G$.
+
+\subsection*{Step 6: time-center the exchange pair together}
+
+Use a midpoint / Crank--Nicolson discretization for the internal exchange pair. This preserves the exchange cancellation at the fully discrete level.
+
+\subsection*{Step 7: exploit the 1D reduction}
+
+Once $w$ is frozen at a stage value, the midpoint exchange substep reduces to a one-dimensional linear solve for the mean profile, followed by an explicit update of $\theta$.
+
+\section{Generalization beyond the uniform-grid second-order baseline}
+
+The baseline scheme above is deliberately simple. It is intended as the first serious test because it makes the exchange structure transparent and avoids unnecessary complications. Once the baseline has been explored, there are many natural generalizations.
+
+\subsection{Nonuniform grids}
+
+If a nonuniform vertical grid is desired, one simply replaces the uniform-grid mass matrix and derivative by operators that satisfy the same discrete integration-by-parts property. The abstract derivation remains unchanged.
+
+\subsection{Compact finite differences}
+
+If one wishes to use a compact finite-difference gradient for the coupling terms, that is perfectly acceptable. Suppose the chosen gradient is
+\[
+G = A^{-1}B_g
+\]
+for some banded matrices $A$ and $B_g$. Then the mean-side divergence should be defined from $G$ by the same adjoint relation
+\[
+D = -H^{-1}G^T H + H^{-1}B.
+\]
+This is the core principle. One should not independently invent the mean divergence.
+
+\subsection{Alternative mean diffusion operators}
+
+The mean diffusion operator can remain a simple second-order operator even if the coupling derivative is upgraded. The reason is structural: the adjointness requirement is needed only for the exchange pair. The mean diffusion merely needs to be dissipative.
+
+\subsection{Higher-order time stepping}
+
+The midpoint-balanced substep can be embedded inside a larger IMEX or operator-splitting framework. The important point is that the exchange pair itself should be advanced in a matched way. If a larger multi-stage scheme is used, the most natural strategy is to freeze $w$ at each stage and apply the balanced substep stagewise.
+
+\section{Why this formulation is worth trying first}
+
+There are many possible numerical modifications one could make to a difficult solver: more dealiasing, more diffusion, different transforms, different basis representations, higher-order stencils, and so on. The reason to prioritize the present construction is that it directly targets the most physically plausible remaining structural problem.
+
+If the instability is genuinely driven by a subtle imbalance in the mean-fluctuation thermal exchange, then the present formulation is close to the strongest possible response. It does not merely damp the problem. It removes the exchange channel as a source of artificial drift by construction.
+
+Conversely, if one implements this balanced midpoint thermal substep and the long-time behavior remains qualitatively unchanged, then one has ruled out an important class of explanations in a very hard way. That too is valuable.
+
+\section{Concluding remarks}
+
+The main message of this note is simple, but important. The coupled mean--fluctuation thermal sector should be discretized in a way that reflects its energy structure. The fluctuation-side coupling term and the mean-side flux-divergence term are not arbitrary pieces of the RHS; they are the two sides of an internal exchange. If they are built from unrelated discrete operators, or advanced in unrelated ways in time, then the discretization itself can generate a secular imbalance even when the continuous equations are perfectly sound.
+
+The finite-difference midpoint formulation derived here provides a clean remedy. It is based on three ingredients:
+
+\begin{enumerate}[label=\arabic*.]
+\item a vertical inner product represented by a mass matrix $H$;
+\item a coupling gradient and its $H$-adjoint divergence;
+\item a midpoint / Crank--Nicolson substep for the exchange pair.
+\end{enumerate}
+
+The resulting semi-discrete and fully discrete energy laws are exact under the intended boundary conditions. The practical implementation is also relatively cheap, because the midpoint coupling reduces to a one-dimensional linear solve for the mean profile once the vertical velocity is frozen at a stage value.
+
+For a first implementation test, the uniform-grid second-order finite-difference baseline is the right place to start. It is simple enough to analyze, explicit enough to debug, and strong enough to answer the central question: is the remaining long-time issue in the NHQGE solver fundamentally a failure of the mean--fluctuation thermal exchange to be represented in a discretely balanced way?
+
+\appendix
+
+\section{Concrete Compatibility Tests After a Successful SBP Audit}
+
+Once the internal SBP audit is small, the next question is no longer whether
+the SBP thermal corrector is balanced on its own grid. The next question is
+whether that corrected SBP state is being transferred back into the
+CGL / Chebyshev representation in a way that is compatible with the rest of the
+solver. This appendix lists the concrete defects worth measuring.
+
+\subsection{Notation}
+
+Let
+\[
+T:\ \text{CGL} \to \text{SBP},
+\qquad
+S:\ \text{SBP} \to \text{CGL}
+\]
+denote the vertical transfer operators. Let
+\[
+H
+\]
+be the SBP norm matrix,
+\[
+M_{\mathrm{CC}}
+\]
+the CGL / Clenshaw--Curtis mass matrix, and let
+\[
+D_1
+\]
+and
+\[
+G_Z
+\]
+denote the vertical first-derivative operators on the SBP and CGL sides,
+respectively.
+
+\subsection{Test 1: roundtrip defect}
+
+The simplest diagnostic is the no-op roundtrip:
+\[
+u_{\mathrm{CGL}}
+\xrightarrow{\,T\,}
+u_{\mathrm{SBP}}
+\xrightarrow{\,S\,}
+\widetilde u_{\mathrm{CGL}}.
+\]
+One should measure
+\[
+\|ST - I\|,
+\qquad
+\|TS - I\|,
+\]
+or, more practically, the corresponding action on representative fields such as
+$\Theta$, $\theta$, and $w$ taken from the solver state.
+
+This test answers the basic question: does the representation change itself
+inject or remove significant vertical structure even before any balanced
+thermal update is applied?
+
+\subsection{Test 2: adjoint / mass compatibility defect}
+
+The SBP exchange cancellation is expressed in the SBP inner product. The
+CGL-side diagnostic uses a different mass matrix. Therefore one should check
+how far the transfers are from being mutually compatible with those two inner
+products. A natural defect matrix is
+\[
+M_{\mathrm{CC}}S - T^T H.
+\]
+If this quantity is not small in an appropriate operator sense, then an SBP
+exchange identity will not, in general, be seen as the same identity after
+mapping back to the CGL side.
+
+This is the cleanest test for the hypothesis that the large CGL-side exchange
+residual is primarily a transfer / monitoring artifact.
+
+\subsection{Test 3: derivative intertwining defect}
+
+The next question is whether vertical differentiation commutes, even
+approximately, with the representation change. The natural defect is
+\[
+G_Z S - S D_1.
+\]
+Equivalently, on the other leg of the transfer,
+\[
+D_1 T - T G_Z.
+\]
+If these defects are large, then a field that is updated by the SBP derivative
+machinery and then transferred back to CGL will not present the same gradient
+to the rest of the solver.
+
+This is particularly relevant because the fluctuation-side coupling and the
+subsequent CGL-side diagnostics both depend directly on vertical gradients.
+
+\subsection{Test 4: immediate post-transfer budget drift}
+
+A more dynamical test is to separate the balanced thermal corrector from the
+rest of the ARS stage and ask:
+
+\begin{enumerate}[label=\arabic*.]
+\item compute the thermal predictor on the CGL side;
+\item transfer to the SBP grid and apply the balanced corrector;
+\item transfer the corrected thermal state back to CGL;
+\item evaluate the old CGL-side exchange residual immediately, before any
+further stage evolution.
+\end{enumerate}
+
+If the large CGL-side residual appears already at step 4, then the dominant
+problem is the transfer / representation layer. If instead the residual stays
+small at step 4 and grows only after the rest of the ARS stage is assembled,
+then the remaining issue lies in the full-step coupling rather than in the
+transfer alone.
+
+\subsection{Test 5: corrector subcycling sensitivity}
+
+Let $\alpha$ be the stage-local corrector size, and define the $m$-fold
+subcycled thermal map by
+\[
+\mathcal P_\alpha^{(m)}
+=
+\underbrace{
+\mathcal P_{\alpha/m}
+\circ \cdots \circ
+\mathcal P_{\alpha/m}
+}_{m\ \text{times}}.
+\]
+This is a targeted way to ask whether the issue is tied specifically to the
+time resolution of the inserted thermal repair, rather than to the whole IMEX
+step size.
+
+The clean comparison is:
+\begin{itemize}
+\item hold the global IMEX step $\Delta t$ fixed;
+\item compare $m=1,2,4,\dots$ for the thermal corrector only;
+\item separately compare against a true global $\Delta t/2$ run.
+\end{itemize}
+
+If increasing $m$ changes the late-window behavior much more than halving the
+global IMEX step, then the main sensitivity is not a plain CFL issue. It is a
+stage-coupling issue associated with how the thermal corrector is inserted into
+the predictor--corrector structure.
+
+Equivalently, this test separates two error sources:
+\begin{itemize}
+\item error in the isolated approximation of the thermal factor
+  $\exp(\alpha\mathcal C)$;
+\item error generated by the composition of that factor with the rest of the
+  reduced ARS stage.
+\end{itemize}
+Subcycling targets the first source directly. A global $\Delta t/2$ test mixes
+both sources together.
+
+\subsection{Test 6: restart-window sensitivity}
+
+The recent runs show that restart timing can itself be diagnostic. Let
+\[
+t_a < t_b
+\]
+be two restart times near the onset window, and compare two runs:
+\begin{itemize}
+\item a replay started from a checkpoint at $t_a$ and continued past $t_b$;
+\item a direct restart started from the checkpoint at $t_b$.
+\end{itemize}
+
+If the direct restart from $t_b$ immediately exhibits violent behavior, while
+the replay from $t_a$ remains comparatively mild through the same overlapping
+interval, then the state stored at $t_b$ is already suspect as an onset
+diagnostic. In that case, the correct interpretation is not ``the method fails
+at $t_b$,'' but rather ``the contamination process begins earlier, and $t_b$ is
+already inside it.''
+
+This test is now essential for the present NHQGE debugging problem, because a
+restart from a later checkpoint can be qualitatively misleading even when the
+stored state is still finite.
+
+In operator language, this is a comparison between
+\[
+\left(\Psi^{\mathrm{new}}\right)^{n_b-n_a}(y_{n_a}^{\mathrm{old}})
+\]
+and
+\[
+y_{n_b}^{\mathrm{old}},
+\]
+where the first trajectory allows the new branch to generate its own approach
+to the shared window, while the second injects the new branch directly onto the
+old branch's accumulated state. The difference between those two starting
+points is itself part of the numerical experiment.
+
+\subsection{Interpretation}
+
+These tests separate two logically distinct statements:
+
+\begin{itemize}
+\item ``the SBP thermal corrector is internally balanced,'' and
+\item ``the full solver preserves that balanced structure after transferring
+the corrected thermal state back into the production representation.''
+\end{itemize}
+
+The recent diagnostics already support the first statement very strongly. The
+purpose of the tests listed here is to determine whether the remaining failure
+mechanism is dominated by
+
+\begin{itemize}
+\item incompatibility between the SBP and CGL representations, or
+\item inconsistency in how the corrected thermal state is reinserted into the
+full ARS predictor--corrector update.
+\end{itemize}
+
+\end{document}

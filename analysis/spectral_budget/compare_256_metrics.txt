@@ -1,0 +1,11 @@
+wrote compare_256.png
+
+convergence metrics (max |log10 ratio| over plotted shells/modes):
+  t=43-53 vs t=53-63: E(k)   max|log10 ratio| = 0.491 (x3.10)
+  t=43-53 vs t=53-63: Th(k)  max|log10 ratio| = 0.296 (x1.98)
+  t=43-53 vs t=53-63: E_m    max|log10 ratio| = 0.291 (x1.96)
+  t=43-53 vs t=53-63: Th_m   max|log10 ratio| = 0.257 (x1.81)
+  t=53-63 vs t=43-63: E(k)   max|log10 ratio| = 0.176 (x1.50)
+  t=53-63 vs t=43-63: Th(k)  max|log10 ratio| = 0.119 (x1.32)
+  t=53-63 vs t=43-63: E_m    max|log10 ratio| = 0.123 (x1.33)
+  t=53-63 vs t=43-63: Th_m   max|log10 ratio| = 0.107 (x1.28)

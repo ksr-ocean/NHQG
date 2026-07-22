@@ -1,0 +1,1261 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{bm}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{microtype}
+
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Lap}{\nabla^2}
+\newcommand{\Lapproj}{\nabla^2_{\!\mathrm{flat}}}
+\newcommand{\Lapsphere}{\nabla^2_{\!\mathbb{S}}}
+\newcommand{\Jflat}{\mathsf{J}_{\mathrm{flat}}}
+\newcommand{\Jsphere}{\mathsf{J}_{\mathbb{S}}}
+\newcommand{\meanS}[1]{\langle #1 \rangle_{\mathbb{S}}}
+\newcommand{\Ld}{L_d}
+\newcommand{\Ra}{\mathrm{Ra}}
+\newcommand{\Pr}{\mathrm{Pr}}
+\newcommand{\Ek}{\mathrm{Ek}}
+\newcommand{\rjet}{r_{\mathrm{jet}}}
+\newcommand{\phijet}{\varphi_{\mathrm{jet}}}
+\newcommand{\bff}{\bm{f}}
+\newcommand{\bu}{\bm{u}}
+\newcommand{\bn}{\bm{n}}
+\newcommand{\hr}{\hat{\bm{r}}}
+\newcommand{\hphi}{\hat{\bm{\phi}}}
+\newcommand{\hz}{\hat{\bm{z}}}
+
+\title{Spherical NHQGE on a single polar cap via stereographic projection \\
+{\large Formulation, spectral discretization, and discrete mean--fluctuation exchange}}
+\author{Working note --- NHQGE / Jupiter polar dynamics}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We extend the doubly-periodic Cartesian non-hydrostatic quasi-geostrophic
+equation (NHQGE) solver to a spherical polar cap bounded poleward of a
+midlatitude jet. Geometry is captured exactly via stereographic projection
+from the opposite pole onto a tangent plane, which renders the induced
+metric conformal with a single position-dependent factor.  The horizontal
+operator that appears in the streamfunction-PV inversion is the spherical
+Laplacian $\Lapsphere$ throughout, never the flat-disk Laplacian.  We
+write down the prognostic equations on the cap, perform an azimuthal
+Fourier decomposition, and discuss the radial spectral discretization in
+detail: a Jacobi/Zernike basis (the recommended option, denoted
+\emph{Option~A}) and a Chebyshev-on-$r^{2}$ alternative (\emph{Option~B}),
+with the limitations of the latter near the pole made explicit.  The
+vertical Chebyshev/CGL Galerkin/tau structure is unchanged from the
+existing Cartesian code.  The dominant non-trivial change to the
+mean--fluctuation thermal exchange is that all horizontal averages must
+be taken with respect to the spherical area measure, not the projected
+disk area; the discrete SBP corrector therefore operates on
+spherical-area-weighted profiles, and the discrete adjoint pair must be
+defined under the weighted inner product.  We give the time-stepping
+algorithm, dealiasing prescription, boundary-condition enforcement,
+diagnostic definitions, CFL constraint, and a validation strategy that
+exploits the small-cap $\rjet \to 0$ Cartesian limit.
+\end{abstract}
+
+\tableofcontents
+
+% -----------------------------------------------------------------------
+\section{Domain and geometry}
+% -----------------------------------------------------------------------
+
+\subsection{Spherical cap}
+
+Let $\mathbb{S}^2$ denote the unit two-sphere parameterized by latitude
+$\varphi \in [-\pi/2, \pi/2]$ and longitude $\lambda \in [0, 2\pi)$.
+Equivalently in colatitude $\vartheta = \pi/2 - \varphi \in [0, \pi]$,
+$(\vartheta, \lambda)$ are standard spherical coordinates.  Throughout
+we work in non-dimensional units (planet radius set to one); reinstating
+a dimensional radius $a$ is a trivial rescaling.
+
+The computational domain is a single polar cap from the north pole
+($\vartheta = 0$) down to a fixed jet latitude $\phijet \in (0, \pi/2)$,
+i.e.\ colatitude $\vartheta \in [0, \pi/2 - \phijet]$.  We treat the
+boundary $\vartheta = \pi/2 - \phijet$ as a no-normal-flow wall (the
+jet axis); see Section~\ref{sec:bcs} below.
+
+\subsection{Stereographic projection from the south pole}
+
+Project the sphere from the south pole onto the plane tangent to the
+north pole.  A point at colatitude $\vartheta$ and longitude $\lambda$
+maps to the projected disk coordinates
+\begin{equation}
+  r = \tan(\vartheta/2), \qquad \phi = \lambda,
+  \label{eq:stereo-fwd}
+\end{equation}
+and the inverse is
+\begin{equation}
+  \vartheta = 2 \arctan(r), \qquad \lambda = \phi.
+  \label{eq:stereo-inv}
+\end{equation}
+Under this map, the north pole maps to the origin $r=0$, the equator
+maps to the unit circle $r = 1$, and the south pole maps to $r = \infty$.
+The cap $\vartheta \in [0, \pi/2 - \phijet]$ maps to the disk
+$r \in [0, \rjet]$ where
+\begin{equation}
+  \rjet \,=\, \tan\!\left(\frac{\pi/2 - \phijet}{2}\right)
+        \,=\, \tan\!\left(\frac{\pi}{4} - \frac{\phijet}{2}\right).
+  \label{eq:rjet}
+\end{equation}
+For $\phijet = 45^\circ$, $\rjet = \tan(22.5^\circ) \approx 0.4142$.
+For $\phijet = 30^\circ$, $\rjet = \tan(30^\circ) = 1/\sqrt{3} \approx 0.5774$.
+
+\subsection{Induced metric and conformal factor}
+
+The line element on the sphere is $ds_{\mathbb{S}}^{2} = d\vartheta^{2}
++ \sin^{2}\vartheta \, d\lambda^{2}$.  Substituting~\eqref{eq:stereo-inv}
+gives, after standard manipulation,
+\begin{equation}
+  ds_{\mathbb{S}}^{2} \;=\; \mu(r)\,\bigl(dr^{2} + r^{2} d\phi^{2}\bigr),
+  \qquad
+  \mu(r) \;=\; \frac{4}{(1+r^{2})^{2}}.
+  \label{eq:metric}
+\end{equation}
+The map is therefore \emph{conformal}: the induced metric is the flat
+metric scaled by a single position-dependent factor $\mu(r)$.  We will
+use $\mu(r)$ throughout for this conformal factor.
+
+The spherical area element is
+\begin{equation}
+  dA_{\mathbb{S}} \;=\; \mu(r)\,r\,dr\,d\phi.
+  \label{eq:area}
+\end{equation}
+The total spherical area of the cap is
+\begin{equation}
+  A_{\mathrm{cap}}
+  \;=\; \int_{0}^{2\pi}\!\!\int_{0}^{\rjet} \mu(r)\,r\,dr\,d\phi
+  \;=\; 2\pi \int_{0}^{\rjet} \frac{4 r}{(1+r^{2})^{2}}\,dr
+  \;=\; 2\pi\!\left(2 - \frac{2}{1+\rjet^{2}}\right)
+  \;=\; \frac{4\pi\,\rjet^{2}}{1+\rjet^{2}}.
+  \label{eq:Acap}
+\end{equation}
+For $\phijet = 45^\circ$: $A_{\mathrm{cap}} = 4\pi(\rjet^{2}/(1+\rjet^{2}))
+\approx 4\pi \cdot 0.1716/1.1716 \approx 4\pi \cdot 0.1465$, i.e.\ about
+$14.65\%$ of the full-sphere area $4\pi$. (This matches
+$A_{\mathrm{cap}}/4\pi = (1 - \sin\phijet)/2$ for $\phijet = 45^\circ$,
+giving $(1 - \sqrt{2}/2)/2 \approx 0.1464$, as expected.)
+
+\subsection{Coriolis parameter and planetary vorticity gradient}
+
+The Coriolis parameter on the rotating sphere is $f_{\mathbb{S}} =
+2\Omega\sin\varphi = 2\Omega\cos\vartheta$.  Substituting
+$\vartheta = 2\arctan(r)$,
+\begin{equation}
+  f(r) \;=\; 2\Omega\,\frac{1 - r^{2}}{1 + r^{2}}.
+  \label{eq:fr}
+\end{equation}
+At the pole $f(0) = 2\Omega$; at the equator $f(1) = 0$; for the
+$45^\circ$ cap edge, $f(\rjet) = 2\Omega(1-\tan^{2}(22.5^\circ))/
+(1+\tan^{2}(22.5^\circ)) = 2\Omega \cos(45^\circ) = \sqrt{2}\,\Omega$.
+
+The meridional gradient of $f$ along the sphere (the ``$\beta$ effect'')
+is
+\begin{equation}
+  \beta_{\mathbb{S}}(r) \;\equiv\; \frac{\partial f}{\partial s_{\mathbb{S}}}
+  \;=\; \frac{1}{\sqrt{\mu(r)}}\,\frac{df}{dr}
+  \;=\; \frac{(1+r^{2})}{2}\,\frac{d}{dr}\!\!\left[2\Omega
+  \frac{1-r^{2}}{1+r^{2}}\right]
+  \;=\; -\,\frac{4\Omega\,r}{1+r^{2}},
+  \label{eq:beta}
+\end{equation}
+where $s_{\mathbb{S}}$ is meridional arc length on the sphere and we used
+$ds_{\mathbb{S}} = \sqrt{\mu}\,dr$.  Note that $\beta_{\mathbb{S}}(0) = 0$
+(no $\beta$ at the pole) and $\beta_{\mathbb{S}}(\rjet) < 0$ in this
+sign convention (i.e.\ $f$ decreases as one moves equatorward).
+
+% -----------------------------------------------------------------------
+\section{Differential operators on the sphere via the projection}
+\label{sec:operators}
+% -----------------------------------------------------------------------
+
+For any 2D Riemannian metric $ds^{2} = g_{ij}\,dx^{i}dx^{j}$ with
+inverse $g^{ij}$, the gradient and Laplacian of a scalar field $\psi$
+are
+\begin{equation}
+  (\nabla \psi)^{i} \;=\; g^{ij}\,\partial_{j}\psi,
+  \qquad
+  \Lap \psi \;=\; \frac{1}{\sqrt{g}}\,\partial_{i}\!\left(
+  \sqrt{g}\,g^{ij}\,\partial_{j}\psi\right).
+  \label{eq:LaplaceBeltrami}
+\end{equation}
+For the conformally-flat metric~\eqref{eq:metric}, $g^{ij} =
+\mu^{-1}\delta^{ij}$ and $\sqrt{g} = \mu r$, so the spherical
+Laplacian and gradient in projected $(r, \phi)$ coordinates are
+\begin{equation}
+  \boxed{\;\;
+  \Lapsphere \psi \;=\; \frac{1}{\mu(r)}\,\Lapproj \psi
+  \;=\; \frac{1}{\mu(r)}\!\left[
+  \frac{1}{r}\frac{\partial}{\partial r}\!\left(r\frac{\partial \psi}{\partial r}\right)
+  + \frac{1}{r^{2}}\frac{\partial^{2}\psi}{\partial\phi^{2}}
+  \right]
+  \;\;}
+  \label{eq:LapSphere}
+\end{equation}
+and
+\begin{equation}
+  \nabla_{\mathbb{S}} \psi
+  \;=\; \frac{1}{\sqrt{\mu(r)}}\!\left(
+  \hr\,\partial_{r}\psi + \hphi\,\frac{1}{r}\partial_{\phi}\psi\right).
+  \label{eq:gradSphere}
+\end{equation}
+The two-dimensional Jacobian (the curl-projection of two gradients
+along the surface normal $\hn$) is, equivalently,
+\begin{equation}
+  \boxed{\;\;
+  \Jsphere(a, b)
+  \;\equiv\; \nabla_{\mathbb{S}} a \times \nabla_{\mathbb{S}} b \cdot \hn
+  \;=\; \frac{1}{\mu(r)}\,\Jflat(a, b),
+  \;\;}
+  \label{eq:JacSphere}
+\end{equation}
+with the flat-disk Jacobian
+\begin{equation}
+  \Jflat(a, b)
+  \;=\; \frac{1}{r}\!\left[(\partial_{r} a)(\partial_{\phi} b)
+  - (\partial_{\phi} a)(\partial_{r} b)\right].
+  \label{eq:JacFlat}
+\end{equation}
+A scalar advection by an incompressible spherical-surface velocity
+$\bu_{\mathbb{S}} = \hn \times \nabla_{\mathbb{S}}\psi$ is then
+exactly $\bu_{\mathbb{S}} \cdot \nabla_{\mathbb{S}} a = \Jsphere(\psi, a)$,
+and Eq.~\eqref{eq:JacSphere} states that the spherical advection
+operator is the flat advection operator scaled by $\mu^{-1}$.
+
+% -----------------------------------------------------------------------
+\section{NHQGE on the sphere}
+\label{sec:nhqge}
+% -----------------------------------------------------------------------
+
+\subsection{Continuum equations}
+
+On the rotating sphere we keep the standard NHQGE prognostic structure
+of four fields: perturbation potential vorticity $q'$, vertical
+velocity $w$, perturbation temperature $\theta$, and mean-temperature
+deviation $\overline{\Theta}'(z)$.  We non-dimensionalize as in the
+existing Cartesian code (Miquel et al.~2026, eqs.~3.1a--d).  Replace
+the flat horizontal operators by their spherical counterparts; the
+vertical Chebyshev/CGL structure is unchanged.
+
+\paragraph{Streamfunction--PV inversion.}
+\begin{equation}
+  \boxed{\;\;
+  \bigl(\Lapsphere - \Ld^{-2}(z)\bigr)\,\psi(r,\phi,z)
+  \;=\; -\,q'(r,\phi,z),
+  \;\;}
+  \label{eq:psi-q}
+\end{equation}
+to be solved \emph{pointwise in $z$} (the inversion does not couple
+different $z$ levels).  The deformation radius $\Ld(z)$ may depend on
+$z$ if stratification is non-uniform; for the Boussinesq NHQGE used
+in the present code base $\Ld$ is constant in $z$ and the dependence
+shown is for generality.
+
+\paragraph{PV equation.}
+\begin{equation}
+  \partial_{t} q' + \Jsphere(\psi, q')
+  + \Jsphere(\psi, f)
+  - \partial_{z} w
+  \;=\; -\,\mathcal{D}_{q}\,q',
+  \label{eq:q-eq}
+\end{equation}
+with $\mathcal{D}_{q}$ a horizontal dissipation operator
+(Section~\ref{sec:dissipation}).  Since $f = f(r)$ is axisymmetric, the
+planetary stretching term simplifies to
+\begin{equation}
+  \Jsphere(\psi, f) \;=\; -\,\frac{1}{\mu(r)\,r}\,
+  \frac{\partial \psi}{\partial \phi}\,\frac{df}{dr},
+  \label{eq:Jpsi-f}
+\end{equation}
+which equals $\beta_{\mathbb{S}}(r)\,u_{r}^{\mathbb{S}}$ where
+$u_{r}^{\mathbb{S}}$ is the meridional component of the spherical
+physical velocity.
+
+\paragraph{Vertical-velocity equation.}
+\begin{equation}
+  \partial_{t} w + \Jsphere(\psi, w)
+  - \partial_{z}\psi
+  - \frac{\Ra}{\Pr}\,\theta
+  \;=\; -\,\mathcal{D}_{w}\,w.
+  \label{eq:w-eq}
+\end{equation}
+
+\paragraph{Temperature-fluctuation equation.}
+\begin{equation}
+  \partial_{t}\theta + \Jsphere(\psi, \theta)
+  + w\,\bigl(1 + \partial_{z}\overline{\Theta}'\bigr)
+  \;=\; -\,\mathcal{D}_{\theta}\,\theta,
+  \label{eq:theta-eq}
+\end{equation}
+where $\overline{\Theta}_{\mathrm{cond}}(z) = 1-z$ is the conductive
+background and $\overline{\Theta}'(z)$ is its prognostic deviation.
+
+\paragraph{Mean-temperature equation.}
+\begin{equation}
+  \boxed{\;\;
+  \partial_{t}\overline{\Theta}'
+  \;=\; -\,\partial_{z}\meanS{w\,\theta}(z)
+  + \frac{1}{\Pr}\,\partial_{z}^{2}\overline{\Theta}',
+  \;\;}
+  \label{eq:meantemp-eq}
+\end{equation}
+where the bracket
+\begin{equation}
+  \meanS{F}(z) \;\equiv\;
+  \frac{1}{A_{\mathrm{cap}}} \int_{0}^{2\pi}\!\!\int_{0}^{\rjet}
+  F(r,\phi,z)\,\mu(r)\,r\,dr\,d\phi
+  \label{eq:sphmean}
+\end{equation}
+is the \emph{spherical area mean} of $F$ over the cap.  The
+distinction from the projected-disk mean (without the $\mu$ factor)
+is the central numerical point of this document for the discrete
+mean--fluctuation thermal exchange; see Section~\ref{sec:sbp}.
+
+\subsection{Boundary conditions}
+\label{sec:bcs}
+
+\begin{description}[leftmargin=2em,style=nextline]
+  \item[Vertical:] $w = \theta = \overline{\Theta}' = 0$ at $z = 0, 1$.
+  $\psi$ inherits a horizontal-domain Helmholtz inversion at each $z$;
+  no separate vertical BC on $q'$.
+  \item[Pole, $r=0$:] regularity.  In azimuthal mode $m$, all fields
+  must scale like $r^{|m|}$ near the origin to be smooth scalar
+  functions of $(x,y)$.  This is built in to the Jacobi/Zernike basis
+  (Section~\ref{sec:radialA}); for the Chebyshev-on-$r^{2}$ basis it
+  has to be imposed by tau enforcement (Section~\ref{sec:radialB}).
+  \item[Jet, $r=\rjet$:] no normal flow.  The radial component of the
+  spherical physical velocity is
+  $u_{r}^{\mathbb{S}} = -\,(1/\sqrt{\mu})(1/r)\,\partial_{\phi}\psi$,
+  so $u_{r}^{\mathbb{S}}|_{r=\rjet} = 0$ for every $\phi$ requires
+  $\partial_{\phi}\psi|_{r=\rjet} = 0$, i.e.\ $\psi(r=\rjet, \phi) =
+  \psi_{\mathrm{jet}}(z, t)$ independent of $\phi$.  Without loss of
+  generality choose the gauge $\psi_{\mathrm{jet}} \equiv 0$.  This
+  becomes the Dirichlet condition on $\psi$ in the inversion
+  Eq.~\eqref{eq:psi-q}, enforced by a tau row in the radial direction.
+  We additionally impose Dirichlet $w = \theta = 0$ at $r = \rjet$
+  for the dissipation operator and the Galerkin/tau treatment of the
+  $w,\theta$ equations.
+\end{description}
+
+\subsection{Dissipation operators}
+\label{sec:dissipation}
+
+The Cartesian code uses operators of the form
+$\mathcal{D}_{f} = \nu_{f}(-\Lap)^{p} + (\text{drag for }q')$
+applied to each fluctuation field $f \in \{q', w, \theta\}$ with the
+same hyper-order $p$.  On the sphere there are two natural choices
+for the underlying horizontal Laplacian:
+
+\begin{description}[leftmargin=2em,style=nextline]
+  \item[Spherical-Laplacian dissipation:]
+  $\mathcal{D}_{f} = \nu_{f}(-\Lapsphere)^{p}$.  Physically consistent.
+  Costs more in the IMEX precompute because $\Lapsphere = \mu^{-1}
+  \Lapproj$ is not diagonal in the radial basis: applying $\Lapsphere$
+  in spectral space requires a multiplication by $\mu^{-1}$ in physical
+  space (or a dense radial operator from the spectral form).
+  \item[Flat-disk Laplacian dissipation:]
+  $\mathcal{D}_{f} = \nu_{f}(-\Lapproj)^{p}$.  Cheaper and matches the
+  Cartesian-code conventions exactly, but has the unphysical implication
+  that dissipation is stronger near the pole (where $\mu$ is largest)
+  than at the cap edge.  Acceptable as an experimental simplification
+  if the dissipation amplitude is small enough to remain a sub-leading
+  effect in the energy budget.
+\end{description}
+
+We adopt the spherical-Laplacian variant in this document and flag
+where the cheaper variant would simplify the implementation.
+
+% -----------------------------------------------------------------------
+\section{Spectral expansion in azimuth and pole regularity}
+% -----------------------------------------------------------------------
+
+Expand any horizontal field $F(r,\phi,z,t)$ in azimuthal Fourier modes,
+\begin{equation}
+  F(r,\phi,z,t) \;=\; \sum_{m \in \mathbb{Z}} F_{m}(r,z,t)\,e^{i m \phi},
+  \qquad
+  F_{-m} = \overline{F_{m}} \text{ for real } F.
+  \label{eq:Fourier-azim}
+\end{equation}
+For a real field we store only $m \ge 0$ via the standard real-FFT.
+Linear horizontal operators with axisymmetric coefficients act
+mode-by-mode.  In particular,
+\begin{equation}
+  \Lapproj F \;\longleftrightarrow\;
+  \mathcal{L}_{m}\,F_{m}(r,z),
+  \qquad
+  \mathcal{L}_{m} \;\equiv\;
+  \frac{1}{r}\frac{d}{dr}\!\left(r\frac{d}{dr}\right) - \frac{m^{2}}{r^{2}}
+  = \frac{d^{2}}{dr^{2}} + \frac{1}{r}\frac{d}{dr} - \frac{m^{2}}{r^{2}},
+  \label{eq:Lm-flat}
+\end{equation}
+and $\Lapsphere F \leftrightarrow \mu^{-1}(r)\,\mathcal{L}_{m}\,F_{m}$.
+The Helmholtz inversion~\eqref{eq:psi-q} therefore reduces, in each
+azimuthal mode $m$ and at each $z$, to a one-dimensional radial
+problem
+\begin{equation}
+  \boxed{\;\;
+  \mathcal{H}_{m}(z)\,\psi_{m}(r,z) \;=\; -\,q'_{m}(r,z),
+  \quad
+  \mathcal{H}_{m}(z) \;\equiv\;
+  \mu^{-1}(r)\,\mathcal{L}_{m} - \Ld^{-2}(z),
+  \;\;}
+  \label{eq:Hm}
+\end{equation}
+with $\psi_{m}(\rjet, z) = 0$ as Dirichlet BC and the regularity
+condition at $r = 0$ specified below.
+
+\paragraph{Pole regularity.}
+A smooth scalar function on the disk has a Taylor expansion
+$F(r,\phi) = \sum_{j \ge 0}\sum_{m} c_{j,m} r^{j} e^{im\phi}$ in which
+each $(j, m)$ pair satisfies $j \ge |m|$ and $j - |m|$ is even.  In
+azimuthal mode $m$, the radial profile $F_{m}(r)$ therefore admits an
+expansion $F_{m}(r) = r^{|m|}\,G_{m}(r^{2})$ with $G_{m}$ analytic at
+$r=0$.  Equivalently, $F_{m}(r)$ has a definite parity $(-1)^{|m|}$
+under $r \to -r$ extended through the origin, and its leading behavior
+is $F_{m}(r) \sim r^{|m|}$.  This is the regularity constraint that
+the radial basis must respect.
+
+% -----------------------------------------------------------------------
+\section{Radial discretization, Option A: Jacobi/Zernike basis}
+\label{sec:radialA}
+% -----------------------------------------------------------------------
+
+\subsection{Definition}
+
+Let $\xi = 2(r/\rjet)^{2} - 1 \in [-1, 1]$ for $r \in [0, \rjet]$, so
+$\xi = -1$ at the pole and $\xi = +1$ at the jet.  For each azimuthal
+mode $m$, expand the radial profile of any field as
+\begin{equation}
+  \boxed{\;\;
+  F_{m}(r) \;=\; \left(\frac{r}{\rjet}\right)^{|m|}\,
+  \sum_{n=0}^{N_{r}-1} \widetilde{F}_{m,n}\,
+  P_{n}^{(0,\,|m|)}(\xi),
+  \;\;}
+  \label{eq:Jacobi-basis}
+\end{equation}
+where $P_{n}^{(\alpha,\beta)}$ are the Jacobi polynomials of degree $n$
+and parameters $(\alpha, \beta)$.  This is, up to normalization, the
+Zernike basis on the unit disk rescaled to radius $\rjet$.  The leading
+factor $(r/\rjet)^{|m|}$ enforces the correct $r^{|m|}$ behavior at
+the pole \emph{exactly}, so no auxiliary regularity tau row is needed.
+
+The Gauss--Jacobi quadrature appropriate to weight $w(\xi) =
+(1-\xi)^{0}(1+\xi)^{|m|}$ provides $N_{r}$ nodes $\xi_{j}^{(m)}$ and
+weights $w_{j}^{(m)}$ such that
+\begin{equation}
+  \int_{-1}^{1} g(\xi)\,(1+\xi)^{|m|}\,d\xi
+  \;\approx\; \sum_{j=1}^{N_{r}} w_{j}^{(m)}\,g(\xi_{j}^{(m)})
+\end{equation}
+is exact for polynomials $g$ of degree at most $2N_{r} - 1$.  This is
+exactly the quadrature needed to evaluate inner products of the
+Jacobi polynomials $P_{n}^{(0,|m|)}$ against themselves with the
+right weight.  In terms of $r$, the change of variable
+$d\xi = (4 r/\rjet^{2})\,dr$ and $r\,dr = (\rjet^{2}/4)\,d\xi$ gives
+\begin{equation}
+  \int_{0}^{\rjet} F_{m}(r)\,r\,dr
+  \;=\; \frac{\rjet^{2}}{4}\!\left(\frac{1}{2}\right)^{|m|}
+  \int_{-1}^{1} \widetilde{F}_{m}(\xi)\,(1+\xi)^{|m|}\,d\xi,
+\end{equation}
+where $\widetilde{F}_{m}(\xi) = \sum_{n} \widetilde{F}_{m,n}
+P_{n}^{(0,|m|)}(\xi)$ is the Jacobi-coefficient form (the leading
+$(r/\rjet)^{|m|}$ factor and $\xi$-substitution combine into the
+$(1+\xi)^{|m|}$ weight).  This is the natural inner product for
+\emph{flat}-disk integrals.  For \emph{spherical} integrals we add a
+factor of $\mu(r)$ in physical space; see Section~\ref{sec:sbp}.
+
+\subsection{Differentiation in the Jacobi basis}
+
+Standard Jacobi-polynomial recurrence gives the derivative
+\begin{equation}
+  \frac{d}{d\xi} P_{n}^{(0,|m|)}(\xi)
+  \;=\; \tfrac{1}{2}(n + |m| + 1)\,P_{n-1}^{(1,\,|m|+1)}(\xi),
+\end{equation}
+and a chain rule converts $d/d\xi \to d/dr$ via
+$d\xi/dr = 4r/\rjet^{2}$.  More usefully, one computes the matrix
+$\mathsf{D}_{r}^{(m)}$ that maps Jacobi coefficients of $F_{m}(r)$ to
+the Jacobi coefficients of $\partial_{r}F_{m}(r)$ in the appropriate
+$(\alpha,\beta)$ family for the derivative; this is a sparse
+banded matrix.  The radial Laplacian operator $\mathcal{L}_{m}$ in
+spectral form is then
+\begin{equation}
+  \mathsf{L}_{m}
+  \;=\; \mathsf{D}_{r}^{(m)\,2}
+  + \mathsf{R}^{-1}\,\mathsf{D}_{r}^{(m)}
+  - m^{2}\,\mathsf{R}^{-2},
+  \label{eq:Lm-spectral}
+\end{equation}
+where $\mathsf{R}$ is the diagonal multiplication-by-$r$ operator in
+physical space, lifted to spectral via the basis transform.  In
+practice we form $\mathsf{L}_{m}$ as a single $N_{r} \times N_{r}$
+dense matrix per $m$, then $\mathsf{H}_{m}(z) = \mathsf{M}^{-1}\,
+\mathsf{L}_{m} - \Ld^{-2}(z)\,\mathsf{I}$ where $\mathsf{M}$ is the
+multiplication-by-$\mu(r)$ operator in spectral form.  $\mathsf{M}$
+is dense (it is the Jacobi expansion of the function $\mu(r)$ acting
+multiplicatively); $\mathsf{H}_{m}(z)$ is therefore dense.  Inversion
+is by LU once per $m$ (and once per $z$ if $\Ld(z)$ varies).
+
+\subsection{Boundary conditions in the Jacobi basis}
+
+Pole regularity: enforced by construction; nothing to do.
+
+Jet Dirichlet $\psi_{m}(\rjet, z) = 0$: the value at $\xi = +1$ is
+$\sum_{n} \widetilde{\psi}_{m,n}\,P_{n}^{(0,|m|)}(1)$ with the
+identity $P_{n}^{(0,|m|)}(1) = 1$, so the BC is the linear constraint
+$\sum_{n} \widetilde{\psi}_{m,n} = 0$.  We enforce it by replacing the
+last spectral row of $\mathsf{H}_{m}(z)$ by this constraint (a tau
+row).  For Neumann BCs (used optionally on $w, \theta$), use
+$\partial_{r} P_{n}^{(0,|m|)}|_{\xi=1}$ given by the standard Jacobi
+identity.
+
+\subsection{Why this is the recommended option}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Exact pole regularity.}  The factor $(r/\rjet)^{|m|}$
+  is built in.  No tau enforcement near $r=0$, no spurious modes from
+  trying to represent a non-polynomial behavior with a polynomial
+  basis.
+  \item \textbf{Spectral convergence.}  For analytic radial profiles,
+  the Jacobi expansion converges geometrically.  The Cartesian code
+  enjoys the same property in $z$ via Chebyshev expansion, so the
+  full $(m, n, k_{z})$ representation is uniformly spectral.
+  \item \textbf{Natural quadrature for nonlinear products.}
+  Gauss--Jacobi nodes provide exact integration of polynomial radial
+  products up to degree $2N_{r} - 1$, so over-resolution by a factor
+  of $\sim 3/2$ in the radial direction yields a clean dealiased
+  Jacobian (Section~\ref{sec:dealias}).
+  \item \textbf{Same algorithmic shape as the existing Cartesian
+  code.}  Per-$m$ dense radial solves play the same role as
+  per-shell scalar solves in the Cartesian Helmholtz; precomputed and
+  cached IMEX inverses generalize directly.
+\end{itemize}
+
+% -----------------------------------------------------------------------
+\section{Radial discretization, Option B: Chebyshev-on-$r^{2}$}
+\label{sec:radialB}
+% -----------------------------------------------------------------------
+
+For comparison, define $\xi = 2(r/\rjet)^{2} - 1 \in [-1, 1]$ as
+before but expand the radial profile of every azimuthal mode in
+plain Chebyshev polynomials of $\xi$:
+\begin{equation}
+  F_{m}(r) \;=\; \sum_{n=0}^{N_{r}-1} \widehat{F}_{m,n}\,T_{n}(\xi).
+  \label{eq:Cheb-r2-basis}
+\end{equation}
+This basis is identical for every $m$ and uses standard Chebyshev
+machinery (DCT, three-term recurrence, well-behaved differentiation
+matrices), which is the only reason to consider it: the existing
+Cartesian code already has this machinery for the vertical direction.
+
+\subsection{The pole-regularity defect}
+
+The basis~\eqref{eq:Cheb-r2-basis} is polynomial in $r^{2}$ but not
+in $r$.  This is benign for $m = 0$ and for any $m$ such that
+$|m|$ is even, where the regularity requirement $F_{m}(r) \sim
+r^{|m|}$ near the pole is automatically a polynomial in $r^{2}$.
+For $|m|$ odd, however, the regularity requirement is
+$F_{m}(r) \sim r \cdot (\text{analytic in } r^{2})$ near the pole,
+which is \emph{not} polynomial in $\xi = 2(r/\rjet)^{2} - 1$.  Near
+$\xi = -1$ this requires representing $\sqrt{(1+\xi)/2}$, whose
+Chebyshev expansion in $\xi$ converges algebraically (like $1/n^{2}$)
+rather than spectrally.  The accuracy near the pole for any odd-$|m|$
+mode therefore degrades to algebraic.
+
+A weakened workaround is to enforce, by tau rows, that
+$F_{m}(r=0) = 0$ for $|m| \ge 1$ (and also that low-order $r$
+derivatives vanish for $|m| \ge 2$, etc.), but this only enforces a
+finite number of vanishing conditions, not the correct $r^{|m|}$
+analytic behavior, and does not recover spectral convergence.
+
+\subsection{When Option~B is acceptable}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item As a \emph{prototype} to validate the rest of the
+  infrastructure (dealiasing, IMEX, mean exchange) before committing
+  to the more elaborate Jacobi machinery.  In a prototype run,
+  algebraic convergence near the pole is a known limitation, not a
+  blocker.
+  \item For \emph{axisymmetric} runs ($m = 0$ only, no shear
+  instabilities), where the regularity defect does not appear at all.
+  \item For \emph{benchmark cross-checks} of the Jacobi
+  implementation, where Option~B run at high $N_{r}$ should agree
+  with Option~A run at moderate $N_{r}$ in the smooth interior.
+\end{itemize}
+
+\subsection{Boundary conditions in Option~B}
+
+The Dirichlet jet condition is the simplest sum:
+$\sum_{n} \widehat{F}_{m,n}\,T_{n}(1) = \sum_{n} \widehat{F}_{m,n}
+= 0$.  Enforced as a tau row.  Pole conditions, when imposed at all,
+use $T_{n}(-1) = (-1)^{n}$, $T_{n}'(-1) = (-1)^{n+1}\,n^{2}$, etc.
+
+% -----------------------------------------------------------------------
+\section{Vertical discretization (Chebyshev/CGL Galerkin/tau)}
+% -----------------------------------------------------------------------
+
+The vertical discretization is taken over verbatim from the existing
+Cartesian solver and is summarised here for completeness.  Let
+$\eta = 2z - 1 \in [-1, 1]$ for $z \in [0, 1]$, expand each prognostic
+field in Chebyshev polynomials of $\eta$, and store fields as
+Chebyshev coefficients (the Galerkin/tau formulation).  Vertical
+derivatives use the coefficient-space recurrence $\mathsf{G}_{Z}$ and
+$\mathsf{G}_{Z}^{2}$.  The vertical Vandermonde $\mathsf{V}$ and its
+analytic DCT-I inverse $\mathsf{V}^{-1}$ effect the
+coefficient/nodal transform.  Boundary conditions on $w, \theta,
+\overline{\Theta}'$ are enforced via tau-projection matrices that
+replace the last two Chebyshev coefficients of each field by the BC
+constraints.  The Dirichlet Galerkin basis $\{-T_{n} + T_{n+2}\}$ is
+used for $w$ and $\theta$ in the implicit solve; $q'$ retains the
+full Chebyshev coefficient representation; $\overline{\Theta}'$ uses
+the Dirichlet Galerkin basis on its $z$-only space.
+
+The point of recapping this is that all the vertical infrastructure
+ports unchanged: the spherical extension is purely horizontal.
+
+% -----------------------------------------------------------------------
+\section{Helmholtz inversion in spectral form}
+\label{sec:helmholtz}
+% -----------------------------------------------------------------------
+
+In the Jacobi basis (Option~A), the inversion~\eqref{eq:Hm} for each
+azimuthal mode $m$ becomes the dense linear system
+\begin{equation}
+  \boxed{\;\;
+  \mathsf{H}_{m}^{(\mathrm{tau})}(z)\,
+  \widetilde{\psi}_{m,\bullet}(z)
+  \;=\; -\,\widetilde{q}'_{m,\bullet}(z),
+  \;\;}
+  \label{eq:Hm-system}
+\end{equation}
+where $\mathsf{H}_{m}^{(\mathrm{tau})}(z)$ is $\mathsf{H}_{m}(z) =
+\mathsf{M}^{-1}\mathsf{L}_{m} - \Ld^{-2}(z)\mathsf{I}$ with the last
+row replaced by the jet Dirichlet tau row, and the right-hand side has
+its last entry zeroed out.
+
+If $\Ld$ is independent of $z$ then $\mathsf{H}_{m}^{(\mathrm{tau})}$
+depends only on $m$, and one factorization (LU) per $m$ suffices for
+the entire run; there are $\sim N_{m} = N_{\phi}/2 + 1$ such
+factorizations and the inversion at each $z$ level is one back-solve.
+This is the analog of the Cartesian shell precomputation, with the
+shells now being azimuthal modes rather than $|\bm{k}|^{2}$ shells.
+
+If $\Ld(z)$ varies with $z$ (general stratification), there are
+$N_{m} \times (N_{z}+1)$ factorizations, still tractable as a
+once-per-run cost.
+
+\paragraph{Cost.}  Per $m$, the factorization is $O(N_{r}^{3})$ once,
+the application is $O(N_{r}^{2})$ per $z$ per step.  Total per step
+is $O(N_{m} N_{z} N_{r}^{2})$ for the inversion alone, comparable to
+the cost of the radial Jacobi transforms at each azimuthal mode.
+
+% -----------------------------------------------------------------------
+\section{Time stepping (ARS(2,2,2) IMEX)}
+% -----------------------------------------------------------------------
+
+We retain the ARS(2,2,2) IMEX scheme from the Cartesian solver:
+diagonal coefficient $\gamma = 1 - 1/\sqrt{2} \approx 0.2929$,
+off-diagonal $\delta = -\sqrt{2}/2$.  The implicit terms are the
+linear vertical and horizontal dissipation, the buoyancy coupling
+$\Ra/\Pr\,\theta$ in the $w$ equation, and the source $w$ in the
+$\theta$ equation.  The explicit terms are the Jacobian advection,
+the planetary-stretching $\Jsphere(\psi, f)$ term, and the
+mean-exchange contributions in the thermal coupling
+(Section~\ref{sec:sbp}).
+
+\subsection{Implicit operator on the disk}
+
+Per azimuthal mode $m$ and per Chebyshev coefficient $n_{z}$, the
+implicit operator generalizes the Cartesian shell-by-shell scalar
+construction to a $(N_{r}) \times (N_{r})$ dense matrix:
+\begin{equation}
+  \mathsf{A}_{m, n_{z}}^{\prime}
+  \;=\; \alpha_{w,\mathrm{eff}}^{(m, n_{z})}\,\mathsf{I}
+  - (\gamma \Delta t)^{2}\,\mathsf{C}_{m, n_{z}}\,\mathsf{B},
+  \label{eq:Aprime}
+\end{equation}
+with
+\begin{align}
+  \alpha_{q}^{(m)}     &= 1 + \gamma \Delta t\,(\nu_{q}\,\mathsf{S}_{m,p} + \mathrm{drag}), \\
+  \alpha_{w}^{(m)}     &= 1 + \gamma \Delta t\,\nu_{w}\,\mathsf{S}_{m,p}, \\
+  \alpha_{\theta}^{(m)}&= 1 + \gamma \Delta t\,(\nu_{\theta}/\Pr)\,\mathsf{S}_{m,p}, \\
+  \alpha_{w,\mathrm{eff}}^{(m,n_z)} &= \alpha_{w}^{(m)} - (\gamma \Delta t)^{2}\,(\Ra/\Pr)/\alpha_{\theta}^{(m)},
+\end{align}
+where $\mathsf{S}_{m, p}$ is the matrix representation of
+$(-\Lapsphere)^{p}$ in the Jacobi basis at azimuthal mode $m$ (a
+dense $N_{r} \times N_{r}$ matrix when the spherical Laplacian is
+used; reduces to $\mathsf{L}_{m}$ for $p = 1$ scaled by
+$\mu^{-1}$), $\mathsf{B} = \mathsf{G}_{Z}\,\mathsf{H}_{m}^{-1}\,
+\mathsf{G}_{Z}$ is the vertical operator from the $\psi$-coupling
+(now per $m$), and $\mathsf{C}_{m, n_{z}}$ is the corresponding
+$\psi$-shell coefficient from the inversion.  Tau rows for the jet
+Dirichlet condition replace the last spectral row of
+$\mathsf{A}'_{m,n_{z}}$.
+
+The block structure ($q', w, \theta$ jointly) is the same as in the
+Cartesian code, with block elimination giving the
+$\alpha_{w,\mathrm{eff}}$ form above.
+
+\subsection{Precomputation and storage}
+
+For Option~A with constant $\Ld$, $\mathsf{A}'_{m,n_{z}}$ depends on
+the pair $(m, n_{z})$ and is precomputed once.  Number of distinct
+matrices: $N_{m} \times (N_{z} + 1)$.  Storage: $N_{m} \times
+(N_{z}+1) \times N_{r}^{2} \times 8$ bytes (dense, double).  For
+$N_{m} = 64$, $N_{z}+1 = 65$, $N_{r} = 64$, this is $\approx
+135\,\mathrm{MiB}$.  Comparable to the Cartesian IMEX storage.
+
+% -----------------------------------------------------------------------
+\section{Nonlinear Jacobian and dealiasing}
+\label{sec:dealias}
+% -----------------------------------------------------------------------
+
+The Jacobian $\Jsphere(\psi, F) = \mu^{-1} \Jflat(\psi, F)$ is
+evaluated pseudospectrally:
+\begin{enumerate}[leftmargin=2em,itemsep=2pt]
+  \item Transform $\psi, F$ from $(m, n)$ Jacobi/Fourier coefficients
+  to a physical $(r_{j}, \phi_{k})$ grid.  Use Gauss--Jacobi nodes in
+  $r$ (refined for dealiasing, see below) and uniform $\phi$ nodes
+  with one inverse FFT per radial level.
+  \item Compute $\partial_{r}\psi$, $\partial_{\phi}\psi$,
+  $\partial_{r}F$, $\partial_{\phi}F$ in the same physical
+  representation.  Radial derivatives are taken via the spectral
+  derivative matrix $\mathsf{D}_{r}^{(m)}$ in coefficient space then
+  inverse-transformed; azimuthal derivatives multiply the Fourier
+  coefficient by $i m$ before inverse FFT.
+  \item Form $\Jflat(\psi, F)$ pointwise on the $(r_{j}, \phi_{k})$
+  grid via Eq.~\eqref{eq:JacFlat}.
+  \item Multiply by $\mu^{-1}(r_{j})$ pointwise to obtain
+  $\Jsphere(\psi, F)$.
+  \item Forward-transform back to $(m, n)$ coefficients with the
+  same Jacobi/Fourier weights.
+\end{enumerate}
+
+\paragraph{Azimuthal dealiasing.}  Standard $3/2$-rule on the
+azimuthal FFT: pad from $N_{\phi}$ to $N_{\phi}^{\mathrm{pad}} =
+3N_{\phi}/2$, compute the product, truncate back.  Identical to the
+Cartesian code's horizontal dealiasing in one direction.
+
+\paragraph{Radial dealiasing.}  The product of two functions of
+azimuthal mode degree $|m_{1}|, |m_{2}|$ and radial polynomial
+degree $n_{1}, n_{2}$ has azimuthal mode $m_{1} + m_{2}$ and radial
+polynomial degree at most $n_{1} + n_{2} + (|m_{1}| + |m_{2}|)/2$
+(the half-power coming from the $r^{|m|}$ prefactor when
+$|m_{1}|, |m_{2}|$ have opposite parities).  The clean way to
+dealias is to evaluate on a Gauss--Jacobi grid with
+$N_{r}^{\mathrm{pad}} \ge \lceil 3N_{r}/2 \rceil$ nodes for the
+\emph{worst-case} $|m| = N_{m} - 1$ Jacobi family, then truncate
+back to $N_{r}$ coefficients in the appropriate per-$m$ Jacobi
+family.  Mode-by-mode quadrature is exact for the relevant
+polynomial degree when $N_{r}^{\mathrm{pad}}$ is chosen accordingly.
+
+In Option~B (Chebyshev-on-$r^{2}$), the radial dealiasing is the
+standard Chebyshev $3/2$-rule and is independent of $m$, but the
+spectral content of the product near the pole is corrupted by the
+$|m|$-odd half-power behavior, so radial dealiasing alone does not
+restore accuracy.
+
+\paragraph{Conservation properties.}  The Jacobian
+$\Jsphere(\cdot,\cdot)$ is bilinear and antisymmetric, so the
+identities
+\begin{equation}
+  \meanS{\psi\,\Jsphere(\psi, F)} = -\meanS{F\,\Jsphere(\psi, \psi)}/2 = 0
+  \quad\text{(if }F=\psi\text{)},
+\end{equation}
+\begin{equation}
+  \meanS{F\,\Jsphere(\psi, F)} = 0
+  \quad\text{(any }F, \psi\text{)},
+\end{equation}
+should be preserved discretely up to truncation error.  The first
+follows from antisymmetry $\Jsphere(\psi,\psi) = 0$; the second from
+$\meanS{F\,\Jsphere(\psi, F)} = \tfrac{1}{2}\meanS{\Jsphere(\psi, F^{2})}$
+plus the integration-by-parts identity
+$\meanS{\Jsphere(\psi, G)} = 0$ for any $G$ when the BCs allow.
+We discuss the integration-by-parts identity in detail below
+because it is the discrete-conservation handle for the SBP corrector.
+
+% -----------------------------------------------------------------------
+\section{Integration-by-parts identity for the spherical Jacobian}
+\label{sec:ibp}
+% -----------------------------------------------------------------------
+
+The cleanest statement of the conservation identity is:
+\begin{lemma}
+For any smooth scalar $G$ on the cap with the no-normal-flow
+condition $\psi|_{r=\rjet} = 0$,
+\begin{equation}
+  \meanS{\Jsphere(\psi, G)} \;=\; 0.
+  \label{eq:ibp}
+\end{equation}
+\end{lemma}
+\begin{proof}
+By Eq.~\eqref{eq:JacSphere} and~\eqref{eq:area},
+\begin{align*}
+  A_{\mathrm{cap}}\meanS{\Jsphere(\psi, G)}
+  &= \int_{0}^{2\pi}\!\!\int_{0}^{\rjet}
+  \mu^{-1}(r)\,\Jflat(\psi, G)\,\mu(r)\,r\,dr\,d\phi \\
+  &= \int_{0}^{2\pi}\!\!\int_{0}^{\rjet}
+  \Jflat(\psi, G)\,r\,dr\,d\phi \\
+  &= \int_{0}^{2\pi}\!\!\int_{0}^{\rjet}
+  \bigl[(\partial_{r}\psi)(\partial_{\phi}G)
+  - (\partial_{\phi}\psi)(\partial_{r}G)\bigr]\,dr\,d\phi.
+\end{align*}
+The first term integrates to zero in $\phi$ (periodicity).  The
+second term integrates to zero in $r$ via integration by parts: the
+boundary contribution at $r=\rjet$ vanishes because $\psi(\rjet, \phi)
+\equiv 0$, and at $r=0$ because $r\,\partial_{\phi}\psi \to 0$ for any
+mode (regularity).  The interior derivative collapses by Leibniz to
+$\partial_{r}(\partial_{\phi}\psi\cdot G)$ minus a term that
+vanishes by periodicity in $\phi$.
+\end{proof}
+
+The crucial observation is that the conformal factor $\mu(r)$
+\emph{cancels exactly} in the spherical area average of $\Jsphere$:
+the $\mu^{-1}$ in the spherical Jacobian and the $\mu$ in the
+spherical area element cancel.  Therefore the discrete identity to
+preserve is the flat-disk identity $\int \Jflat(\psi, G)\,r\,dr\,d\phi
+= 0$, which is independent of $\mu(r)$.  This is a clean discrete
+target: any radial quadrature that integrates Jacobi-polynomial radial
+products of high-enough degree exactly preserves Eq.~\eqref{eq:ibp}.
+
+% -----------------------------------------------------------------------
+\section{Mean--fluctuation thermal exchange under spherical area
+weighting}
+\label{sec:sbp}
+% -----------------------------------------------------------------------
+
+This is the dominant non-trivial change to the existing
+\verb|balanced_sbp2_pc| machinery.  Read carefully.
+
+\subsection{Continuum exchange identity}
+
+Multiply Eq.~\eqref{eq:theta-eq} by $\theta$ and integrate over the
+sphere using the area measure~\eqref{eq:area}:
+\begin{equation}
+  \tfrac{1}{2}\partial_{t} \meanS{\theta^{2}}
+  + \meanS{\theta\,\Jsphere(\psi, \theta)}
+  + \meanS{w\,\theta}\bigl(1 + \partial_{z}\overline{\Theta}'\bigr)
+  \;=\; -\,\meanS{\theta\,\mathcal{D}_{\theta}\theta}.
+  \label{eq:theta-energy}
+\end{equation}
+The advection term $\meanS{\theta\,\Jsphere(\psi,\theta)} =
+\tfrac{1}{2}\meanS{\Jsphere(\psi, \theta^{2})} = 0$ by the IBP
+identity~\eqref{eq:ibp}.  The remaining flux term
+$\meanS{w\,\theta}\,\partial_{z}\overline{\Theta}'$ is exactly the
+\emph{flux from fluctuation to mean} that must be balanced by the
+\emph{flux from mean to fluctuation} in the
+$\overline{\Theta}'$ equation.
+
+Multiply Eq.~\eqref{eq:meantemp-eq} by $\overline{\Theta}'$ and
+integrate over $z$:
+\begin{equation}
+  \tfrac{1}{2}\partial_{t}\!\int_{0}^{1}\!\overline{\Theta}'^{2}\,dz
+  \;=\; -\!\int_{0}^{1}\overline{\Theta}'\,\partial_{z}\meanS{w\theta}\,dz
+  + \frac{1}{\Pr}\!\int_{0}^{1}\overline{\Theta}'\,\partial_{z}^{2}\overline{\Theta}'\,dz.
+  \label{eq:thbar-energy}
+\end{equation}
+Integration by parts in $z$ gives $-\int \overline{\Theta}'\,
+\partial_{z}\meanS{w\theta}\,dz = \int \meanS{w\theta}\,\partial_{z}
+\overline{\Theta}'\,dz$ (boundary terms vanish because
+$\overline{\Theta}'|_{z=0,1} = 0$).  Adding this to the flux term in
+Eq.~\eqref{eq:theta-energy}, the two flux contributions \emph{exactly
+cancel}.  This is the continuum mean--fluctuation exchange identity.
+The discrete machinery must reproduce this cancellation.
+
+\subsection{Discrete spherical area mean}
+
+In Option~A, the spherical area mean of any field $F(r, \phi, z)$ is
+computed by:
+\begin{enumerate}[leftmargin=2em,itemsep=2pt]
+  \item Take the $m=0$ azimuthal Fourier coefficient $F_{0}(r, z)$
+  (the $\phi$-average is $F_{0}$ exactly).
+  \item Multiply by $\mu(r)$ and integrate against the radial measure
+  $r\,dr$ from $0$ to $\rjet$ using Gauss--Jacobi quadrature with
+  weight appropriate to the $m=0$ family:
+  \begin{equation}
+    \meanS{F}(z) \;=\; \frac{2\pi}{A_{\mathrm{cap}}}
+    \int_{0}^{\rjet} F_{0}(r, z)\,\mu(r)\,r\,dr.
+    \label{eq:disc-mean}
+  \end{equation}
+\end{enumerate}
+The Gauss--Jacobi quadrature for $m=0$ uses weights $w_{j}^{(0)}$ at
+nodes $\xi_{j}^{(0)}$, and the integrand is a polynomial in $r^{2}$
+times $\mu(r) = 4(1+r^{2})^{-2}$.  Since $\mu$ is rational rather
+than polynomial, the quadrature is not algebraically exact.  To
+control the quadrature error, oversample radially when computing
+mean-flux profiles $\meanS{w\theta}(z)$: use
+$N_{r}^{\mathrm{mean}} \ge 3 N_{r}/2$ Gauss--Jacobi nodes for the
+$m=0$ family, so that the polynomial part of the integrand is
+integrated exactly to high order and the residual $\mu$
+mis-quadrature is well-resolved.
+
+\subsection{Discrete adjoint pair for the SBP corrector}
+
+The current Cartesian SBP corrector implements the discrete pair
+\begin{align}
+  \text{(A)}\ \ &\text{fluctuation-side feedback to }\theta:
+  \quad -\,w\,\partial_{z}^{(\mathrm{disc})}\overline{\Theta}', \\
+  \text{(B)}\ \ &\text{mean-side flux exchange:}
+  \quad -\,\partial_{z}^{(\mathrm{disc})}\overline{w\theta}^{(\mathrm{disc})},
+\end{align}
+where $\partial_{z}^{(\mathrm{disc})}$ is an SBP-2 difference matrix
+on a uniform $z$-grid distinct from the CGL nodes, and the
+$\overline{\,\cdot\,}^{(\mathrm{disc})}$ average is the Cartesian
+horizontal area average.  The discrete adjoint requirement is that
+\begin{equation}
+  \sum_{j} \omega_{j}^{(\mathrm{sbp})}
+  \overline{w\theta}^{(\mathrm{disc})}_{j}\,
+  (\partial_{z}^{(\mathrm{disc})}\overline{\Theta}')_{j}
+  + \sum_{j} \omega_{j}^{(\mathrm{sbp})}
+  \overline{\Theta}'_{j}\,
+  (\partial_{z}^{(\mathrm{disc})}\overline{w\theta}^{(\mathrm{disc})})_{j}
+  \;=\; 0,
+  \label{eq:disc-adjoint}
+\end{equation}
+for all admissible $\overline{w\theta}, \overline{\Theta}'$
+satisfying the boundary conditions.  This is exactly the discrete
+analog of the IBP identity in $z$ that produced cancellation in the
+continuum.
+
+\paragraph{Spherical change.}  Replace the Cartesian horizontal
+average $\overline{\,\cdot\,}^{(\mathrm{disc})}$ everywhere by the
+spherical area average $\meanS{\,\cdot\,}^{(\mathrm{disc})}$ defined
+by Eq.~\eqref{eq:disc-mean}.  The $z$-direction adjoint structure of
+Eq.~\eqref{eq:disc-adjoint} is unaffected and the SBP-2 difference
+operator and weights $\omega_{j}^{(\mathrm{sbp})}$ on the uniform
+$z$-grid remain identical to the Cartesian implementation.  What
+changes is only the computation of the input profiles
+$\meanS{w\theta}^{(\mathrm{disc})}(z)$ and the back-projection of
+the mean flux from the SBP $z$-grid to the CGL solver $z$-grid (the
+\verb|interp| transfer mode in the existing code).  The transfer
+mode is a $z$-only operation and is independent of the horizontal
+geometry.
+
+\paragraph{Why this preserves global heat balance.}  The total heat
+budget on the cap is
+\begin{equation}
+  \frac{d}{dt}\!\left[\tfrac{1}{2}\meanS{\theta^{2}}_{V}
+  + \tfrac{1}{2}\!\int_{0}^{1}\overline{\Theta}'^{2}\,dz\right]
+  \;=\; -\,\meanS{\theta\,\mathcal{D}_{\theta}\theta}_{V}
+  + \frac{1}{\Pr}\!\int_{0}^{1}\overline{\Theta}'\,
+  \partial_{z}^{2}\overline{\Theta}'\,dz,
+\end{equation}
+where $\meanS{\,\cdot\,}_{V}$ now includes a $z$-integration.  The
+flux exchange terms cancel exactly in the continuum, and the SBP
+discretization in $z$ preserves this cancellation \emph{by
+construction}.  The horizontal averaging change (Cartesian flat
+average $\to$ spherical area average) is purely a definition of what
+``$\meanS{w\theta}(z)$'' means; once that average is computed
+correctly, the SBP machinery in $z$ continues to produce a discrete
+adjoint pair that closes the heat budget.
+
+The danger we are explicitly avoiding: if one were to use the
+flat-disk horizontal average for $\meanS{w\theta}(z)$ but then
+update $\overline{\Theta}'(z)$ with the SBP corrector built around
+that average, the $\overline{\Theta}'$ equation would be balancing
+\emph{the wrong flux}, and the global heat budget would not close.
+This would be the spherical analog of the dealiasing artifact that
+plagued the early Cartesian runs.
+
+\subsection{Exchange residual diagnostic}
+
+Define
+\begin{equation}
+  \mathcal{R}_{\mathrm{exch}}(t)
+  \;\equiv\; \int_{0}^{1}\!\!\!\meanS{w\theta}(z, t)\,
+  \partial_{z}\overline{\Theta}'(z, t)\,dz
+  \;-\; \int_{0}^{1}\!\overline{\Theta}'(z, t)\,
+  \partial_{z}\meanS{w\theta}(z, t)\,dz,
+  \label{eq:exch-resid}
+\end{equation}
+which the continuum identity sets to zero.  Its discrete realization
+under the spherical area average and the SBP-2 $z$-derivative is the
+diagnostic to monitor; the analog of \verb|mean_theta_exchange_resid\
+ual_dealiased| in the Cartesian code.  An additional separate
+diagnostic should report the discretization error of the spherical
+area mean of $w\theta$ against the CGL-grid evaluation, analogous to
+the \verb|Nusselt_dealiased| vs raw \verb|Nusselt| comparison.
+
+% -----------------------------------------------------------------------
+\section{Diagnostics under spherical area weighting}
+\label{sec:diagnostics}
+% -----------------------------------------------------------------------
+
+All horizontal averages in diagnostics use Eq.~\eqref{eq:disc-mean}.
+Specifically:
+
+\paragraph{Nusselt number.}
+\begin{equation}
+  \mathrm{Nu}(t)
+  \;=\; 1 + \int_{0}^{1}\!\!\meanS{w\theta}(z, t)\,dz
+  \;-\; (\text{conduction reference}).
+\end{equation}
+With the closure $\overline{\Theta} = 1 - z + \overline{\Theta}'$,
+\begin{equation}
+  \mathrm{Nu}(t) \;=\; 1 + \int_{0}^{1}\meanS{w\theta}(z, t)\,dz.
+\end{equation}
+
+\paragraph{Kinetic-energy spectra.}  Spherical-area-weighted
+horizontal KE shells are most naturally indexed by total wavenumber
+$k_{n}^{(m)}$ associated with the $(m, n)$ Jacobi mode (the
+eigenvalue of $-\Lapsphere$ on the corresponding eigenfunction in
+the $\Ld \to \infty$ limit).  Define
+\begin{equation}
+  E_{h}(k, z, t)
+  \;=\; \tfrac{1}{2}\sum_{(m, n) \in \mathrm{shell}_{k}}
+  \,k_{n}^{(m)\,2}\,|\widetilde{\psi}_{m, n}(z, t)|^{2}\,N_{m,n},
+\end{equation}
+where $N_{m,n}$ is the squared norm of the $(m, n)$ Jacobi/Zernike
+basis function under the spherical area inner product.  Vertical KE
+spectra $E_{w}(k, z)$ are defined analogously using
+$|\widetilde{w}_{m, n}|^{2}$ and the same shell binning.  The
+Cartesian shell binning by $|\bm{k}|$ is replaced by a binning by
+$k_{n}^{(m)}$ on the disk, but the post-processing pipeline is
+otherwise unchanged.
+
+\paragraph{Spectral KE flux.}  Define the cumulative KE flux
+$\Pi(K) = -\sum_{k \le K} T(k)$ where $T(k)$ is the per-shell
+transfer rate from the rotational and divergent contributions.  The
+analog of the Cartesian $T_{h}(k) = \mathrm{Re}[\widehat{\psi}^{*}
+\cdot \widehat{\Jflat(\psi, \zeta)}]$ becomes
+$T_{h}(k) = \mathrm{Re}[\widetilde{\psi}^{*} \cdot
+\widetilde{\Jsphere(\psi, \zeta)}]$ where the spectral inner product
+uses the spherical area weight.  $T_{d}(k) = -\mathrm{Re}[
+\widetilde{\psi}^{*} \cdot \widetilde{\partial_{z}w}]$ is unchanged
+in form (it does not involve a horizontal Jacobian) but is summed
+over Jacobi/Fourier shells under the spherical inner product.
+
+% -----------------------------------------------------------------------
+\section{CFL and resolution requirements}
+% -----------------------------------------------------------------------
+
+\paragraph{Horizontal CFL.}  Spherical CFL must use the spherical
+arc-length metric.  In projected coords, the relevant horizontal
+arc-length increment near radial node $r_{j}$ is $\Delta s_{j} =
+\sqrt{\mu(r_{j})}\,\Delta r_{j}$, where $\Delta r_{j}$ is the local
+radial node spacing.  The relevant velocity is the spherical
+physical speed
+$|\bu_{\mathbb{S}}| = \mu^{-1/2}\sqrt{(\partial_{r}\psi)^{2} +
+r^{-2}(\partial_{\phi}\psi)^{2}}$.  The CFL constraint is then
+\begin{equation}
+  \Delta t \;\lesssim\; \min_{r, \phi, z}
+  \frac{\sqrt{\mu(r_{j})}\,\Delta r_{j}}
+  {|\bu_{\mathbb{S}}(r_{j}, \phi_{k}, z)|}.
+\end{equation}
+Note the $\mu^{-1/2}$ in the velocity and the $\sqrt{\mu}$ in the
+arc length cancel into a factor of $\Delta r_{j}$ over the spectral
+velocity, but the metric still affects the spacing $\Delta r_{j}$
+itself: Gauss--Jacobi nodes cluster more or less near the endpoints
+depending on the $|m|$ family.
+
+\paragraph{Vertical CFL.}  Identical to Cartesian: the SBP corrector
+imposes $\Delta t < \Delta z_{\mathrm{sbp}}/|w|_{\max}$ in the
+explicit $w \partial_{z}$ step.  This is unaffected by the horizontal
+geometry change.
+
+\paragraph{Resolution.}  Spectral convergence in the Jacobi basis
+requires $N_{r}$ proportional to the smallest physical horizontal
+scale on the sphere, divided by the disk-to-sphere stretch factor at
+that location: smaller scales near the cap edge require higher
+$N_{r}$ than the same scales near the pole.  A practical rule of
+thumb: pick $N_{r}$ such that the smallest resolved physical
+wavelength on the sphere at $r=\rjet$ exceeds a few times the
+expected dissipation scale.
+
+% -----------------------------------------------------------------------
+\section{Validation strategy}
+% -----------------------------------------------------------------------
+
+\subsection{Small-cap Cartesian limit}
+
+For $\rjet \to 0$, $\mu(r) \to 4 + O(r^{2})$ uniformly across the
+disk, $f(r) \to 2\Omega + O(r^{2})$, and the spherical Laplacian
+reduces to $\Lapsphere \to (1/4)\Lapproj$.  Rescale
+$\widetilde{r} = 2 r$, $\widetilde{\nabla} = 2\nabla$ to absorb the
+factor of $4$, and the equations on the small cap reduce to the
+existing Cartesian NHQGE on a disk of radius $2\rjet$ with $f =
+2\Omega$ constant and $\beta = 0$.  A small-cap run should therefore
+reproduce a known Cartesian-disk benchmark, providing an end-to-end
+sanity check of the disk basis, IMEX, dealiasing, and mean exchange
+machinery.
+
+\subsection{Linear axisymmetric onset}
+
+For the $m = 0$ subspace (purely axisymmetric), the linearized NHQGE
+on the cap reduces to a generalized eigenvalue problem in the $m=0$
+Jacobi radial basis.  Compute the lowest-Rayleigh-number unstable
+eigenmode and compare to a pencil-and-paper computation of the same
+eigenvalue (the integrated Sturm--Liouville problem in $r$ on
+$[0, \rjet]$).  Cartesian analog: the existing $\Ra_{c} \approx
+8.6956$, $k_{c} \approx 1.3048$ test for stress-free Rayleigh--B\'enard
+in the doubly-periodic geometry.
+
+\subsection{Discrete IBP and conservation tests}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item Verify $\meanS{\Jsphere(\psi, F)}^{(\mathrm{disc})}$ is zero
+  to roundoff for random $\psi$ satisfying $\psi|_{\rjet} = 0$ and
+  random $F$, using both Option~A and Option~B radial bases.
+  \item Verify the discrete exchange-residual~\eqref{eq:exch-resid}
+  is zero to roundoff under randomly chosen $\meanS{w\theta}$ and
+  $\overline{\Theta}'$ profiles.
+  \item Verify that an integrated heat budget closes under linear
+  forcing: $d/dt(\tfrac{1}{2}\meanS{\theta^{2}}_{V}) +
+  d/dt(\tfrac{1}{2}\int \overline{\Theta}'^{2}) = -\text{(viscous
+  drain)}$.
+\end{itemize}
+
+% -----------------------------------------------------------------------
+\section{Algorithmic summary}
+% -----------------------------------------------------------------------
+
+The full algorithm in pseudo-code, per IMEX stage, with Option~A:
+
+\begin{enumerate}[leftmargin=2em,itemsep=3pt]
+  \item Given Jacobi/Fourier coefficients $\widetilde{q}'_{m, n}(z),
+  \widetilde{w}_{m, n}(z), \widetilde{\theta}_{m, n}(z)$ at the
+  current stage and Chebyshev coefficients of $\overline{\Theta}'(z)$:
+  \item \textbf{Inversion.}  For each $m$, solve
+  $\mathsf{H}_{m}^{(\mathrm{tau})}(z)\,\widetilde{\psi}_{m,\bullet}(z)
+  = -\widetilde{q}'_{m,\bullet}(z)$ using the cached LU factor.
+  Reconstruct $\partial_{z}\widetilde{\psi}_{m,\bullet}$ via the
+  Chebyshev $\mathsf{G}_{Z}$ recurrence.
+  \item \textbf{Transform to physical grid.}  Inverse Jacobi/Fourier
+  transform $\widetilde{\psi}, \widetilde{q}', \widetilde{w},
+  \widetilde{\theta}$ onto a $(r_{j}, \phi_{k})$ Gauss--Jacobi /
+  uniform-$\phi$ grid, oversampled in both directions by $3/2$.
+  Compute physical-space radial and azimuthal derivatives.
+  \item \textbf{Jacobian evaluation.}  Compute
+  $\Jflat(\psi, q'), \Jflat(\psi, w), \Jflat(\psi, \theta)$ on the
+  oversampled physical grid.  Multiply by $\mu^{-1}(r_{j})$ pointwise
+  to get $\Jsphere$.
+  \item \textbf{Forward transform.}  Forward Jacobi/Fourier transform
+  the spherical Jacobian fields back to truncated $(m, n)$
+  coefficients.
+  \item \textbf{Compute spherical horizontal means.}  For
+  $F \in \{w\theta\}$, take $F_{0}(r_{j}, z)$ from the Fourier
+  transform, and apply Eq.~\eqref{eq:disc-mean} to get
+  $\meanS{w\theta}^{(\mathrm{disc})}(z)$.  Transfer to the SBP
+  uniform-$z$ grid.
+  \item \textbf{SBP corrector.}  Apply the
+  \verb|balanced_sbp2_pc|-style discrete pair on the spherical
+  area-weighted profiles to advance $\overline{\Theta}'$ and update
+  the explicit thermal-exchange RHS for $\theta$.  Transfer back to
+  the CGL solver $z$-grid.
+  \item \textbf{Assemble explicit RHS.}  For each prognostic field,
+  add Jacobian contributions, planetary-stretching contributions
+  (from $\Jsphere(\psi, f)$), and mean-exchange contributions.
+  \item \textbf{Implicit IMEX solve.}  For each $(m, n_{z})$ apply
+  the cached $\mathsf{A}'_{m,n_{z}}{}^{-1}$ to the assembled implicit
+  RHS to advance $(q', w, \theta)$ jointly to the next IMEX
+  sub-stage.
+  \item \textbf{Apply BCs.}  Tau-project for jet Dirichlet on $\psi$
+  (already inside the inversion), and tau-project for vertical
+  Dirichlet on $w, \theta, \overline{\Theta}'$.
+  \item \textbf{Diagnostics.}  Periodically compute
+  $\mathrm{Nu}(t)$, $E_{h}(k,z)$, $E_{w}(k,z)$,
+  $\mathcal{R}_{\mathrm{exch}}(t)$, max horizontal/vertical CFL,
+  etc.
+\end{enumerate}
+
+% -----------------------------------------------------------------------
+\section{What is and is not changing relative to the Cartesian code}
+% -----------------------------------------------------------------------
+
+\paragraph{Unchanged.}  Vertical Galerkin/tau Chebyshev structure,
+ARS(2,2,2) IMEX, block elimination of the buoyancy coupling,
+\verb|balanced_sbp2_pc|-style discrete adjoint structure in $z$,
+diagnostic categories (Nusselt, KE spectra, exchange residual),
+overall outer solver loop and IO layout.
+
+\paragraph{Changed.}  Horizontal Fourier $\to$ Jacobi/Zernike $\times$
+azimuthal Fourier; flat horizontal Laplacian $\to$ spherical
+Laplacian via $\mu^{-1}$ factor in the inversion; Cartesian Jacobian
+$\to$ spherical Jacobian via $\mu^{-1}$ factor in evaluation;
+horizontal mean for the SBP corrector $\to$ spherical area mean with
+$\mu(r)\,r\,dr\,d\phi$ measure; Helmholtz inversion shell solve
+$\to$ per-$m$ dense radial solve; KE-spectrum binning by $|\bm{k}|$
+$\to$ binning by Jacobi/Fourier total wavenumber; CFL based on
+spherical arc length, with the $\sqrt{\mu}\,\Delta r$ spacing.
+
+\paragraph{New.}  Per-$m$ Gauss--Jacobi quadrature infrastructure;
+basis-aware radial dealiasing; spherical-area-mean primitive used by
+all diagnostics and the SBP corrector; jet Dirichlet tau row in the
+radial Helmholtz inversion.
+
+% -----------------------------------------------------------------------
+\section{Open theoretical points to confirm with collaborators}
+% -----------------------------------------------------------------------
+
+These are the equation-side questions whose resolution is needed
+before the implementation can claim to be a faithful spherical
+NHQGE rather than a discretization of an unprincipled equation set.
+
+\begin{enumerate}[leftmargin=2em,itemsep=3pt]
+  \item \textbf{Confirm the QG operator is exactly $\Lapsphere$.}
+  We assume throughout that the streamfunction--PV inversion is
+  $(\Lapsphere - \Ld^{-2})\,\psi = -q'$ (one-and-a-half-layer QG on
+  the sphere).  Confirm that the rapid-rotation asymptotic on the
+  curved cap reduces the full primitive equations to this form
+  without surviving curvature-correction terms (e.g.\ no extra
+  $\propto \mu^{-2} f^{2}$ contributions in the inversion).
+  \item \textbf{Confirm the planetary-stretching term form.}  We
+  represent it as $\Jsphere(\psi, f)$, i.e.\ $f$ enters the PV
+  equation purely through the Jacobian with the streamfunction.  This
+  is what the materially-conserved-PV picture gives.  Confirm that
+  no other $\beta$-like term appears (e.g.\ from the asymptotic
+  expansion of horizontal divergence on a curved surface).
+  \item \textbf{Confirm the temperature equation.}  The buoyancy
+  $\Ra/\Pr\,\theta$ enters $w$ as in Cartesian; the term
+  $w\,(1+\partial_{z}\overline{\Theta}')$ enters $\theta$ as in
+  Cartesian.  No metric factor is expected because $z$ is the same
+  vertical coordinate and the buoyancy is a vertical force.  Confirm
+  this once on paper.
+  \item \textbf{Stratification on the cap.}  $\Ld(z)$ may vary in $z$
+  but is assumed independent of $r$ (no horizontal stratification).
+  Confirm this is acceptable for the science target, or relax to
+  $\Ld(r, z)$ (which the implementation supports as long as $\mathsf{H}_{m}$
+  is recomputed for each $z$, with negligible additional cost).
+\end{enumerate}
+
+% -----------------------------------------------------------------------
+\section{Summary}
+% -----------------------------------------------------------------------
+
+The spherical NHQGE on a single polar cap is implementable as a
+direct generalization of the existing Cartesian solver provided
+three points are respected throughout:
+
+\begin{enumerate}[leftmargin=2em,itemsep=3pt]
+  \item The QG operator in the $\psi$--$q'$ inversion is
+  $\Lapsphere = \mu^{-1}\Lapproj$, and \emph{not} the projected-disk
+  Laplacian.
+  \item The horizontal mean entering the mean--fluctuation thermal
+  exchange is the \emph{spherical} area mean
+  $\meanS{\,\cdot\,}$ defined with the $\mu(r)$-weighted area
+  measure, and the SBP-2 corrector operates on this average.  The
+  flat-disk average will silently break the global heat budget.
+  \item Pole regularity is built into the radial basis.  Option~A
+  (Jacobi/Zernike with $r^{|m|}$ prefactor) does this exactly and
+  is recommended.  Option~B (Chebyshev-on-$r^{2}$) is acceptable for
+  axisymmetric prototypes and benchmark cross-checks but loses
+  spectral accuracy near the pole for any odd-$|m|$ mode.
+\end{enumerate}
+
+The vertical Chebyshev/CGL Galerkin/tau structure, the
+ARS(2,2,2) IMEX scheme, and the discrete-adjoint $z$-direction
+machinery of the SBP corrector are inherited from the Cartesian code
+unchanged.  All horizontal infrastructure (transforms, dealiasing,
+implicit shell solves, diagnostics) is replaced by its disk-spectral
+analog, with the conformal factor $\mu(r)$ entering through one
+explicit pointwise multiplication in operator evaluations and one
+explicit weight in horizontal averages.
+
+\end{document}

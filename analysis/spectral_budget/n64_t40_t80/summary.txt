@@ -1,0 +1,9 @@
+window: t = 40.00 .. 80.00, 161 snapshots, Nx=64, Nz=256
+ghost removed (max |anti-Hermitian ky=0| over window): 3.705e+18
+state energy outside 2/3 mask (max fraction): 0.000e+00
+depth-integrated stretching in bt budget (max, should be ~0): 1.018e-09
+vertical Chebyshev tail (top 16 modes / total, max over window): q 3.417e-01, psi 7.165e-01
+energy: sum adv = -3.4244e+01 +/- 6.63e+01 (|.|-sum 1.725e+03), sum stretch = +1.6888e+02 +/- 2.40e+03, sum diss = -8.7099e+02, net = -7.3635e+02
+enstrophy: sum adv = -5.3384e+02 +/- 2.19e+01 (|.|-sum 6.391e+02), sum stretch = +1.4762e+03 +/- 4.54e+01, sum diss = -1.0201e+03, net = -7.7722e+01
+barotropic: sum adv = +3.0638e+02 +/- 1.58e+02, sum diss = -1.9731e+02, net = +1.0907e+02
+energy: <dE/dt> from endpoints = +2.4722e+02 (vs budget net above; both should be small vs injection)

@@ -1,0 +1,7 @@
+window: t = 100.00 .. 120.00, 41 snapshots, Nx=128, Nz=256
+ghost removed (max |anti-Hermitian ky=0| over window): 1.066e+19
+state energy outside 2/3 mask (max fraction): 0.000e+00
+depth-integrated stretching in bt budget (max, should be ~0): 5.825e-08
+energy: sum adv = -4.4118e+00 (|.|-sum 2.225e+03; ratio -2.0e-03), sum stretch = -9.2215e+03, sum diss = -1.2929e+03, net = -1.0519e+04
+enstrophy: sum adv = -1.7526e+02 (|.|-sum 1.363e+03; ratio -1.3e-01), sum stretch = +2.1702e+03, sum diss = -2.3502e+03, net = -3.5529e+02
+energy: <dE/dt> from endpoints = -1.4346e+02 (vs budget net above; both should be small vs injection)

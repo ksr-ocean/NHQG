@@ -1,0 +1,774 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,longtable,array}
+\usepackage{hyperref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+\allowdisplaybreaks
+
+\newcommand{\avg}[1]{\left\langle #1 \right\rangle}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\kb}{k_{\mathrm{bin}}}
+\newcommand{\kbm}{k_{\mathrm{bin},m}}
+\newcommand{\cc}{c^{\mathrm{CC}}}
+\newcommand{\rr}{\omega^{\mathrm{rfft}}}
+\newcommand{\psihat}{\widehat{\psi}}
+\newcommand{\qhat}{\widehat{q}}
+\newcommand{\what}{\widehat{w}}
+\newcommand{\thhat}{\widehat{\theta}}
+
+\title{Reference for the Spectral Diagnostics Archive and Plots}
+\author{}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Purpose}
+
+This note defines, in the notation actually used by the code, the arrays and
+plots written under the archive
+\begin{center}
+\path{output_miquel_zero_tilt_galerkin_ars222_evolvemean_kebudget_blas1_Nx64_Nz256_dt5e5_t8/spectra/}.
+\end{center}
+The same definitions apply to the other ``\path{spectrum_history.npz}''
+archives produced by the Chebyshev/Galerkin budget branch.
+
+The point of this note is narrow: it explains what is stored and what is
+plotted. It does \emph{not} attempt to re-derive the full NHQGE model from
+first principles.
+
+\section{State, transforms, and normalizations}
+
+\subsection{Stored solver state}
+
+The solver state is
+\[
+(\qhat,\what,\thhat,\Theta_{\mathrm{bar}}),
+\]
+with the following storage conventions:
+\begin{itemize}
+\item \(\qhat_n(k_x,k_y)\): Chebyshev coefficients of \(q^{\prime}\).
+\item \(\what,\thhat\): Dirichlet Galerkin coefficients of \(w\) and
+  \(\theta\), converted back to full Chebyshev coefficients before the
+  diagnostics are evaluated.
+\item \(\Theta_{\mathrm{bar}}\): Chebyshev coefficients of the mean-temperature
+  deviation \(\Theta_{\mathrm{bar}}^{\prime}(z)\).
+\end{itemize}
+
+The streamfunction is recovered modewise by
+\[
+\psihat_n(k_x,k_y)
+=
+-\frac{\qhat_n(k_x,k_y)}{|k|^2 + L_d^{-2}}.
+\]
+
+\subsection{Vertical nodes and depth integration}
+
+Let \(z_j\), \(j=0,\dots,N_z\), denote the Chebyshev--Gauss--Lobatto nodes on
+\([0,1]\), and let \(\cc_j\) denote the Clenshaw--Curtis quadrature weights.
+Whenever a diagnostic is depth-integrated in physical space, the code uses
+\[
+\int_0^1 f(z)\,\dd z
+\approx
+\sum_{j=0}^{N_z} \cc_j f(z_j).
+\]
+
+\subsection{Horizontal half-plane Parseval weights}
+
+The horizontal fields are stored in the real-to-complex half plane. The code
+therefore uses the standard \texttt{rfft2} Parseval weight
+\[
+\rr(k_x,k_y)
+=
+\begin{cases}
+1, & k_y = 0 \text{ or Nyquist},\\
+2, & \text{otherwise},
+\end{cases}
+\]
+so that shell sums over the stored half-plane reproduce full-plane quadratic
+quantities.
+
+\subsection{Horizontal shell bins}
+
+Let
+\[
+|k| = \sqrt{k_x^2 + k_y^2},
+\qquad
+\Delta k = \frac{2\pi}{L}.
+\]
+The archive stores shell centers
+\[
+\kbm = \left(m + \frac12\right)\Delta k,
+\qquad
+m=0,\dots,M-1,
+\]
+and shell \(m\) means
+\[
+m\Delta k \le |k| < (m+1)\Delta k.
+\]
+The array \path{k_bins} stores the centers \(\kbm\).
+
+\subsection{A normalization warning}
+
+The archive contains two different kinds of spectral quantities:
+\begin{enumerate}
+\item \textbf{physically normalized horizontal quadratic diagnostics},
+  which include the factor \(N_x^{-4}\) and the \texttt{rfft2} weights;
+\item \textbf{raw coefficient-amplitude diagnostics},
+  which do \emph{not} include \(N_x^{-4}\), depth quadrature, or the
+  \texttt{rfft2} weights.
+\end{enumerate}
+
+This distinction matters. In particular:
+\begin{itemize}
+\item \path{ke_horiz_spec} and all shell tendencies and cumulative fluxes are
+  physically normalized.
+\item \path{q_horiz_spec}, \path{w_horiz_spec}, \path{th_horiz_spec} are
+  shell-binned but \emph{not} divided by \(N_x^4\).
+\item \path{q_vert_spec}, \path{w_vert_spec}, \path{th_vert_spec} are raw
+  Chebyshev coefficient norms.
+\end{itemize}
+
+\section{Scalar arrays in the archive}
+
+The one-dimensional arrays \path{t} and \path{step} store the saved time and
+time-step index.
+
+The remaining one-dimensional scalar diagnostics are:
+\begin{align*}
+\mathrm{Nu}(t)
+&=
+1 + \avg{w\theta}_{xyz},\\
+\avg{w\theta}_{xyz}
+&=
+\frac{1}{N_x^4}
+\sum_{k_x,k_y}\rr(k_x,k_y)
+\sum_{j=0}^{N_z}\cc_j
+\Re\!\bigl(w_j(k_x,k_y)\,\theta_j(k_x,k_y)^*\bigr),\\
+\mathrm{max\_speed}(t)
+&=
+\max_{j,x,y}\sqrt{u(z_j,x,y)^2 + v(z_j,x,y)^2},\\
+\mathrm{max\_w}(t)
+&=
+\max_{j,x,y}|w(z_j,x,y)|,\\
+\mathrm{max\_\theta}(t)
+&=
+\max_{j,x,y}|\theta(z_j,x,y)|,\\
+\mathrm{max\_tw}(t)
+&=
+\max_{j,x,y}|w(z_j,x,y)\theta(z_j,x,y)|,
+\end{align*}
+with
+\[
+u = -\partial_y \psi,
+\qquad
+v = \partial_x \psi.
+\]
+
+The RMS quantities are
+\begin{align*}
+q_{\mathrm{rms}}^2
+&=
+\frac{1}{N_x^4}
+\sum_{k_x,k_y}\rr
+\sum_j \cc_j |q_j(k_x,k_y)|^2,\\
+w_{\mathrm{rms}}^2
+&=
+\frac{1}{N_x^4}
+\sum_{k_x,k_y}\rr
+\sum_j \cc_j |w_j(k_x,k_y)|^2,\\
+\theta_{\mathrm{rms}}^2
+&=
+\frac{1}{N_x^4}
+\sum_{k_x,k_y}\rr
+\sum_j \cc_j |\theta_j(k_x,k_y)|^2.
+\end{align*}
+
+The array \path{vol_avg_tw} stores \(\avg{w\theta}_{xyz}\) itself, and the
+archive field \path{Nusselt} is defined by
+\[
+\mathrm{Nu} = 1 + \avg{w\theta}_{xyz}.
+\]
+
+The archive also stores the solver-consistent dealiased heat-flux profile used
+by the prognostic mean-temperature equation. Let
+\[
+\avg{w\theta}_{xy}^{\mathrm{deal}}(z_j)
+\]
+denote the horizontal mean obtained from the same padded horizontal work grid
+and inverse transforms used in the mean equation. Then
+\begin{align*}
+\avg{w\theta}_{xyz}^{\mathrm{deal}}
+&=
+\sum_{j=0}^{N_z}\cc_j \avg{w\theta}_{xy}^{\mathrm{deal}}(z_j),\\
+\mathrm{Nu}^{\mathrm{deal}}
+&=
+1 + \avg{w\theta}_{xyz}^{\mathrm{deal}},\\
+\Delta_{\mathrm{flux}}
+&=
+\avg{w\theta}_{xyz}^{\mathrm{deal}} - \avg{w\theta}_{xyz}.
+\end{align*}
+These are stored respectively under the keys \path{vol_avg_tw_dealiased},
+\path{Nusselt_dealiased}, and \path{heat_flux_mismatch}.
+
+The arrays \path{Nusselt_raw} and \path{vol_avg_tw_raw}, when present, are
+simple aliases for \path{Nusselt} and \path{vol_avg_tw}; they are included only
+to make the distinction between raw and dealiased thermal diagnostics explicit
+in newer archives.
+
+The array \path{th_bar_max} requires care. It is defined by
+\[
+\max_{0\le n\le N_z} |\Theta_{\mathrm{bar},n}(t)|.
+\]
+This is \emph{not} the physical-space maximum of
+\(|\Theta_{\mathrm{bar}}^{\prime}(z)|\). It is the maximum absolute Chebyshev
+coefficient of the mean-temperature deviation.
+
+The mean-profile amplitudes and gradients are:
+\begin{align*}
+\Theta_{\max}
+&=
+\max_j |\Theta_{\mathrm{bar}}^{\prime}(z_j)|,\\
+(\partial_z \Theta_{\mathrm{bar}}^{\prime})_{\max}
+&=
+\max_j |\partial_z \Theta_{\mathrm{bar}}^{\prime}(z_j)|,\\
+g_{\min}
+&=
+\min_j \bigl(1 - \partial_z \Theta_{\mathrm{bar}}^{\prime}(z_j)\bigr),\\
+g_{\max}
+&=
+\max_j \bigl(1 - \partial_z \Theta_{\mathrm{bar}}^{\prime}(z_j)\bigr),\\
+g_{1/2}
+&=
+1 - \partial_z \Theta_{\mathrm{bar}}^{\prime}(z=1/2).
+\end{align*}
+These are stored as \path{th_bar_phys_max}, \path{dth_bar_dz_max},
+\path{mean_grad_min}, \path{mean_grad_max}, and \path{mean_grad_mid}.
+
+For \path{thermal_closure = "evolve_mean"}, the code also stores the global
+mean-reservoir budget
+\begin{align*}
+\mathcal{E}_{\mathrm{mean}}
+&=
+\frac{1}{2\varepsilon^2}\int_0^1 \Theta_{\mathrm{bar}}^{\prime}(z)^2\,\dd z,\\
+\mathcal{T}_{\mathrm{mean,flux}}
+&=
+\frac{1}{\varepsilon^2}\int_0^1
+\Theta_{\mathrm{bar}}^{\prime}(z)\,
+\partial_t\Theta_{\mathrm{bar}}^{\prime}\big|_{\mathrm{flux}}\,\dd z,\\
+\mathcal{T}_{\mathrm{mean,diff}}
+&=
+\frac{1}{\varepsilon^2}\int_0^1
+\Theta_{\mathrm{bar}}^{\prime}(z)\,
+\partial_t\Theta_{\mathrm{bar}}^{\prime}\big|_{\mathrm{diff}}\,\dd z,\\
+\mathcal{T}_{\mathrm{mean,tot}}
+&=
+\mathcal{T}_{\mathrm{mean,flux}}
++
+\mathcal{T}_{\mathrm{mean,diff}}.
+\end{align*}
+These are stored under the keys \path{mean_energy},
+\path{mean_flux_exchange_tendency}, \path{mean_diffusion_tendency}, and
+\path{mean_total_tendency}.
+
+The fluctuation-to-mean exchange residuals are stored in both raw and
+solver-consistent dealiased form:
+\begin{align*}
+\mathcal{R}_{\mathrm{ex,raw}}
+&=
+\mathcal{T}_{\theta\leftrightarrow\mathrm{mean}}^{\mathrm{raw}}
++
+\mathcal{T}_{\mathrm{mean,flux}},\\
+\mathcal{R}_{\mathrm{ex,deal}}
+&=
+\mathcal{T}_{\theta\leftrightarrow\mathrm{mean}}^{\mathrm{deal}}
++
+\mathcal{T}_{\mathrm{mean,flux}}.
+\end{align*}
+These correspond to the archive keys \path{mean_theta_exchange_residual} and
+\path{mean_theta_exchange_residual_dealiased}; the fluctuation-side sums are
+\path{th_mean_feedback_sum} and \path{th_mean_feedback_sum_dealiased}.
+The corresponding \path{*_rel} fields divide these residuals by the sum of the
+absolute values of the two compared transfer terms.
+
+\section{Vertical and horizontal spectra}
+
+\subsection{Vertical raw coefficient spectra}
+
+Let \(\widetilde{w}_n(k_x,k_y)\) and \(\widetilde{\theta}_n(k_x,k_y)\) denote
+the full Chebyshev coefficients obtained after lifting the stored Dirichlet
+Galerkin coefficients back to the Chebyshev basis.
+
+Then the arrays
+\path{q_vert_spec}, \path{w_vert_spec}, and \path{th_vert_spec}
+store
+\begin{align*}
+S^{(z)}_q(n)
+&=
+\sum_{k_x,k_y \in \mathrm{stored\ half\ plane}}
+|\qhat_n(k_x,k_y)|^2,\\
+S^{(z)}_w(n)
+&=
+\sum_{k_x,k_y \in \mathrm{stored\ half\ plane}}
+|\widetilde{w}_n(k_x,k_y)|^2,\\
+S^{(z)}_{\theta}(n)
+&=
+\sum_{k_x,k_y \in \mathrm{stored\ half\ plane}}
+|\widetilde{\theta}_n(k_x,k_y)|^2.
+\end{align*}
+
+These are \emph{raw coefficient norms}. They do not include any depth
+quadrature, any shell weighting, or any \(N_x^{-4}\) normalization.
+
+The array \path{vert_mode} is simply the integer sequence
+\[
+(0,1,\dots,N_z).
+\]
+
+\subsection{Horizontal shell spectra of \(q\), \(w\), and \(\theta\)}
+
+For a nodal spectral field \(f_j(k_x,k_y)\), define the shell-binned
+depth-integrated amplitude
+\[
+S_f^{(k)}(m)
+=
+\sum_{|k|\in \mathrm{shell}\ m}
+\rr(k_x,k_y)
+\sum_{j=0}^{N_z}\cc_j |f_j(k_x,k_y)|^2.
+\]
+
+Then the archive stores \(S_q^{(k)}\), \(S_w^{(k)}\), and \(S_{\theta}^{(k)}\)
+under the keys \path{q_horiz_spec}, \path{w_horiz_spec}, and
+\path{th_horiz_spec}.
+
+Again, these are shell amplitudes but not fully normalized physical energies,
+because the code does \emph{not} divide them by \(N_x^4\).
+
+\subsection{Horizontal kinetic-energy spectrum}
+
+The stored shellwise kinetic-energy spectrum is
+\[
+E_{\mathrm{KE}}(m)
+=
+\sum_{|k|\in \mathrm{shell}\ m}
+\frac{\rr(k_x,k_y)}{N_x^4}
+\left[
+\frac12 |k|^2
+\sum_{j=0}^{N_z}\cc_j |\psi_j(k_x,k_y)|^2
+\right].
+\]
+This quantity is stored as \path{ke_horiz_spec}.
+
+\section{Split equations used in the shell budgets}
+
+The code constructs the shell budgets from the same explicit/implicit split
+used by the IMEX solver. At the diagnostic level, the relevant decomposition is
+\begin{align*}
+\partial_t q^{\prime}
+&=
+\mathcal{N}_q + \mathcal{B}_q + \mathcal{S}_q + \mathcal{D}_q,\\
+\partial_t w
+&=
+\mathcal{N}_w + \mathcal{C}_{qw} + \mathcal{B}_w + \mathcal{D}_w,\\
+\partial_t \theta
+&=
+\mathcal{N}_{\theta} + \mathcal{M}_{\theta} + \mathcal{C}_{\theta} + \mathcal{D}_{\theta},
+\end{align*}
+with
+\begin{align*}
+\mathcal{N}_q &= -A[\psi,q^{\prime}],&
+\mathcal{B}_q &= -\ii \beta k_x \psihat,&
+\mathcal{S}_q &= \partial_z w,&
+\mathcal{D}_q &= -\lambda_q(|k|)\, q^{\prime},\\
+\mathcal{N}_w &= -A[\psi,w],&
+\mathcal{C}_{qw} &= \frac{1}{|k|^2 + L_d^{-2}}\,\partial_z q^{\prime},&
+\mathcal{B}_w &= \frac{\widetilde{Ra}}{\sigma}\,\theta,&
+\mathcal{D}_w &= -\lambda_w(|k|)\, w,\\
+\mathcal{N}_{\theta} &= -A[\psi,\theta],&
+\mathcal{M}_{\theta} &= -w\,\partial_z \Theta_{\mathrm{bar}}^{\prime},&
+\mathcal{C}_{\theta} &= w,&
+\mathcal{D}_{\theta} &= -\lambda_{\theta}(|k|)\,\theta.
+\end{align*}
+
+Here \(A[\psi,\cdot]\) denotes the dealiased horizontal Jacobian or flux-form
+advection operator chosen by the run configuration, and
+\(\lambda_q,\lambda_w,\lambda_{\theta}\) are the precomputed horizontal
+dissipation multipliers stored internally as
+\path{grid.diss_rate_q}, \path{grid.diss_rate_w}, and
+\path{grid.diss_rate_th}.
+
+For runs with \path{thermal_closure = "evolve_mean"}, the mean-temperature
+equation used by the code is
+\[
+\partial_t \Theta_{\mathrm{bar}}^{\prime}
+=
+-\varepsilon^2 \partial_z \avg{w\theta}_{xy}
++ \frac{\varepsilon^2}{\sigma}\,\partial_{zz}\Theta_{\mathrm{bar}}^{\prime},
+\]
+but the shell budgets below only track how \(\Theta_{\mathrm{bar}}^{\prime}\)
+feeds back into the \(\theta\) equation through \(\mathcal{M}_{\theta}\).
+
+\section{Shellwise budget densities actually stored}
+
+\subsection{Generic quadratic shell tendency}
+
+For any nodal spectral field \(f_j(k_x,k_y)\) and nodal spectral term
+\(g_j(k_x,k_y)\), the code defines the shell tendency
+\[
+\mathcal{T}[f;g](m)
+=
+\sum_{|k|\in \mathrm{shell}\ m}
+\frac{\rr(k_x,k_y)}{N_x^4}
+\sum_{j=0}^{N_z}\cc_j
+\Re\!\bigl(f_j(k_x,k_y)^*\, g_j(k_x,k_y)\bigr).
+\]
+This is the shell contribution to
+\(\frac{\dd}{\dd t}\bigl(\frac12 \|f\|_2^2\bigr)\).
+
+\subsection{KE shell tendencies}
+
+Because \(\psihat = -\qhat/(|k|^2+L_d^{-2})\), the kinetic-energy shell tendency
+from a \(q\)-equation term \(q_t^{(\star)}\) is computed as
+\[
+\mathcal{T}^{\mathrm{KE}}_{\star}(m)
+=
+\sum_{|k|\in \mathrm{shell}\ m}
+\frac{\rr(k_x,k_y)}{N_x^4}
+\left[
+-\frac{|k|^2}{|k|^2 + L_d^{-2}}
+\sum_{j=0}^{N_z}\cc_j
+\Re\!\bigl(\psi_j(k_x,k_y)^*\, q_{t,j}^{(\star)}(k_x,k_y)\bigr)
+\right].
+\]
+
+The archive stores the following KE shell tendencies:
+\begin{align*}
+T^{\mathrm{KE}}_{\mathrm{NL}} &= \mathcal{T}^{\mathrm{KE}}_{\mathcal{N}_q},\\
+T^{\mathrm{KE}}_{\beta} &= \mathcal{T}^{\mathrm{KE}}_{\mathcal{B}_q},\\
+T^{\mathrm{KE}}_{\mathrm{stretch}} &= \mathcal{T}^{\mathrm{KE}}_{\mathcal{S}_q},\\
+T^{\mathrm{KE}}_{\mathrm{diss}} &= \mathcal{T}^{\mathrm{KE}}_{\mathcal{D}_q},\\
+T^{\mathrm{KE}}_{\mathrm{tot}} &=
+T^{\mathrm{KE}}_{\mathrm{NL}}
++ T^{\mathrm{KE}}_{\beta}
++ T^{\mathrm{KE}}_{\mathrm{stretch}}
++ T^{\mathrm{KE}}_{\mathrm{diss}}.
+\end{align*}
+These correspond respectively to the archive keys
+\path{ke_nonlinear_shell_tendency},
+\path{ke_beta_shell_tendency},
+\path{ke_stretch_shell_tendency},
+\path{ke_diss_shell_tendency}, and
+\path{ke_total_shell_tendency}.
+
+The nonlinear cumulative flux is defined shellwise by
+\[
+\Pi^{\mathrm{KE}}_{\mathrm{NL}}(m)
+=
+-\sum_{\ell=0}^{m}
+\mathcal{T}^{\mathrm{KE}}_{\mathcal{N}_q}(\ell),
+\]
+and is stored as \path{ke_nonlinear_flux}.
+
+\subsection{\(w\)-variance shell tendencies}
+
+The \(w\)-variance shell budgets use the generic quadratic form
+\(\mathcal{T}[w; \cdot]\). The stored quantities are
+\begin{align*}
+T^{w}_{\mathrm{NL}} &= \mathcal{T}[w;\mathcal{N}_w],\\
+T^{w}_{q} &= \mathcal{T}[w;\mathcal{C}_{qw}],\\
+T^{w}_{\mathrm{buoy}} &= \mathcal{T}[w;\mathcal{B}_w],\\
+T^{w}_{\mathrm{diss}} &= \mathcal{T}[w;\mathcal{D}_w],\\
+T^{w}_{\mathrm{tot}} &= T^{w}_{\mathrm{NL}} + T^{w}_{q}
++ T^{w}_{\mathrm{buoy}} + T^{w}_{\mathrm{diss}}.
+\end{align*}
+These correspond to the archive keys
+\path{w_nonlinear_shell_tendency},
+\path{w_q_coupling_shell_tendency},
+\path{w_buoyancy_shell_tendency},
+\path{w_diss_shell_tendency}, and
+\path{w_total_shell_tendency}.
+
+The nonlinear cumulative flux is
+\[
+\Pi^{w}_{\mathrm{NL}}(m)
+=
+-\sum_{\ell=0}^{m}
+\mathcal{T}[w;\mathcal{N}_w](\ell),
+\]
+stored as \path{w_nonlinear_flux}.
+
+\subsection{\(\theta\)-variance shell tendencies}
+
+The \(\theta\)-variance shell budgets use the same quadratic form:
+\begin{align*}
+T^{\theta}_{\mathrm{NL}} &= \mathcal{T}[\theta;\mathcal{N}_{\theta}],\\
+T^{\theta}_{\mathrm{mf}} &= \mathcal{T}[\theta;\mathcal{M}_{\theta}],\\
+T^{\theta}_{\mathrm{cond}} &= \mathcal{T}[\theta;\mathcal{C}_{\theta}],\\
+T^{\theta}_{\mathrm{diss}} &= \mathcal{T}[\theta;\mathcal{D}_{\theta}],\\
+T^{\theta}_{\mathrm{tot}} &= T^{\theta}_{\mathrm{NL}} + T^{\theta}_{\mathrm{mf}}
++ T^{\theta}_{\mathrm{cond}} + T^{\theta}_{\mathrm{diss}}.
+\end{align*}
+These correspond to the archive keys
+\path{th_nonlinear_shell_tendency},
+\path{th_mean_feedback_shell_tendency},
+\path{th_conduction_shell_tendency},
+\path{th_diss_shell_tendency}, and
+\path{th_total_shell_tendency}.
+
+The array \path{th_conduction_shell_tendency} deserves a short comment. In the
+split code it comes from the implicit source \(+\;w\) in the \(\theta\)
+equation, so the shell diagnostic is
+\[
+\mathcal{T}[\theta; w](m).
+\]
+The label ``conduction'' is therefore an interpretation of the term's origin in
+the conductive background-gradient forcing, not a separate Laplacian acting on
+\(\theta\).
+
+The nonlinear cumulative flux is
+\[
+\Pi^{\theta}_{\mathrm{NL}}(m)
+=
+-\sum_{\ell=0}^{m}
+\mathcal{T}[\theta;\mathcal{N}_{\theta}](\ell),
+\]
+stored as \path{th_nonlinear_flux}.
+
+\subsection{Dealiased thermal shell diagnostics}
+
+The archive also stores shellwise thermal quantities built from the same
+dealiased horizontal product path used by the mean equation. Let
+\[
+F_m^{\mathrm{deal}}(z_j)
+=
+\avg{w_m\theta_m}_{xy}^{\mathrm{deal}}(z_j)
+\]
+be the dealiased shell-filtered mean heat-flux profile. Then the stored fields
+are
+\begin{align*}
+H_m^{\mathrm{deal}}
+&=
+\sum_{j=0}^{N_z}\cc_j F_m^{\mathrm{deal}}(z_j),\\
+\mathcal{T}^{\theta,\mathrm{deal}}_{\mathrm{cond}}(m)
+&=
+H_m^{\mathrm{deal}},\\
+\mathcal{T}^{w,\mathrm{deal}}_{\mathrm{buoy}}(m)
+&=
+\frac{\widetilde{Ra}}{\sigma}\,
+H_m^{\mathrm{deal}},\\
+\mathcal{T}^{\theta,\mathrm{deal}}_{\mathrm{mf}}(m)
+&=
+-\sum_{j=0}^{N_z}\cc_j\,
+\partial_z\Theta_{\mathrm{bar}}^{\prime}(z_j)\,
+F_m^{\mathrm{deal}}(z_j).
+\end{align*}
+These are stored as \path{heat_flux_shell_dealiased},
+\path{th_conduction_shell_tendency_dealiased},
+\path{w_buoyancy_shell_tendency_dealiased}, and
+\path{th_mean_feedback_shell_tendency_dealiased}.
+
+These are not independent new PDE terms; they are the shellwise thermal
+exchange diagnostics obtained after replacing the raw product \(w\theta\) by the
+same dealiased product path used in the mean equation itself.
+
+\section{What each PNG in \texttt{spectra/} means}
+
+\subsection{The two spectrum heatmaps}
+
+The run script writes two immediate summary figures:
+\begin{itemize}
+\item \path{w_vertical_spectrum_vs_time.png}
+\item \path{w_horizontal_spectrum_vs_time.png}
+\end{itemize}
+
+These are heatmaps of
+\[
+\log_{10}\!\bigl(\max(S,10^{-300})\bigr),
+\]
+where \(S\) is respectively \path{w_vert_spec} or \path{w_horiz_spec}. The
+color scale is linear in this logged quantity, using the minimum and maximum
+values present in the saved archive.
+
+So these two PNGs are purely visualization transforms of the stored arrays:
+\begin{itemize}
+\item \path{w_vertical_spectrum_vs_time.png} plots
+  \(\log_{10}\!\bigl(\max(S_w^{(z)},10^{-300})\bigr)\).
+\item \path{w_horizontal_spectrum_vs_time.png} plots
+  \(\log_{10}\!\bigl(\max(S_w^{(k)},10^{-300})\bigr)\).
+\end{itemize}
+
+\subsection{Budget heatmaps and lineouts}
+
+The directory \path{ke_budget_plots/} contains heatmaps and lineouts for the
+KE, \(w\)-variance, and \(\theta\)-variance shell budgets.
+
+If \(X(t,m)\) is any stored signed shell quantity such as
+\path{ke_stretch_shell_tendency} or \path{th_mean_feedback_shell_tendency}, the
+plotter displays
+\[
+\mathrm{symlog}(X)
+=
+\mathrm{sgn}(X)\,
+\log_{10}\!\left(1 + \frac{|X|}{\Lambda}\right),
+\]
+where the threshold \(\Lambda\) is chosen automatically from the data percentiles.
+
+This transform is \emph{only} for plotting. The archive stores the unmodified
+arrays.
+
+Therefore:
+\begin{itemize}
+\item each \path{*_heatmap.png} in \path{ke_budget_plots/} is a heatmap of the
+  corresponding stored shell field \(X(t,m)\) after this signed symlog
+  transform;
+\item each \path{*_lineouts.png} is a set of fixed-time slices
+  \(m \mapsto X(t_{\mathrm{sel}},m)\), again plotted after the same signed
+  symlog transform.
+\end{itemize}
+
+\subsection{Mean-exchange history plot}
+
+The directory \path{mean_exchange_plots/} contains
+\path{mean_exchange_history.png}. This figure is a collection of time traces of
+the stored scalar arrays listed above:
+\begin{itemize}
+\item mean-reservoir budget terms:
+  \path{mean_flux_exchange_tendency},
+  \path{th_mean_feedback_sum},
+  \path{th_mean_feedback_sum_dealiased},
+  \path{mean_diffusion_tendency},
+  \path{mean_theta_exchange_residual},
+  \path{mean_theta_exchange_residual_dealiased},
+  \path{mean_total_tendency};
+\item heat-flux diagnostics:
+  \path{Nusselt_dealiased},
+  \path{Nusselt},
+  \path{vol_avg_tw_dealiased},
+  \path{vol_avg_tw},
+  \path{heat_flux_mismatch};
+\item mean-gradient and mean-amplitude diagnostics:
+  \path{mean_grad_min}, \path{mean_grad_mid}, \path{mean_grad_max},
+  \path{th_bar_phys_max}, \path{dth_bar_dz_max}, \path{mean_energy}.
+\end{itemize}
+The first, second, and fourth panels use the same signed symlog display
+transform as the shell-budget plots; the gradient panel is plotted on a linear
+axis.
+
+\section{Dominant-shell products}
+
+The directory \path{dominant_shell/} is generated from the saved archive as
+follows.
+
+\subsection{Shell selection}
+
+Choose a selector field \(X_{\mathrm{sel}}(t,m)\). By default the script uses
+the stored KE stretching field:
+\[
+X_{\mathrm{sel}}(t,m) = T^{\mathrm{KE}}_{\mathrm{stretch}}(t,m).
+\]
+
+Choose a reference time \(t_{\ast}\). By default the script uses the final saved
+time.
+
+Then the dominant shell index is
+\[
+m_{\ast}
+=
+\arg\max_m |X_{\mathrm{sel}}(t_{\ast},m)|.
+\]
+The archive stores both \(m_{\ast}\) and the corresponding shell center
+\(k_{\mathrm{bin},m_{\ast}}\) in
+\path{dominant_shell_timeseries.npz}.
+
+\subsection{Extracted time series}
+
+At this fixed shell \(m_{\ast}\), the script extracts the time series
+\[
+t \mapsto X(t,m_{\ast})
+\]
+for the following quantities:
+\begin{itemize}
+\item KE: \path{ke_total}, \path{ke_stretch}, \path{ke_diss}, \path{ke_nonlinear}.
+\item \(w\)-variance: \path{w_total}, \path{w_buoyancy}, \path{w_q_coupling},
+  \path{w_diss}, \path{w_nonlinear}.
+\item \(\theta\)-variance: \path{th_total}, \path{th_conduction},
+  \path{th_mean_feedback}, \path{th_diss}, \path{th_nonlinear}.
+\end{itemize}
+together with the scalar time traces \path{Nusselt} and \path{max_speed}.
+
+The figure \path{dominant_shell_timeseries.png} plots these extracted shellwise
+time series using the same signed symlog display convention as the budget
+lineouts.
+
+\section{Key archive fields at a glance}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.30\textwidth} >{\raggedright\arraybackslash}p{0.62\textwidth}}
+\toprule
+Field & Meaning \\
+\midrule
+\endfirsthead
+\toprule
+Field & Meaning \\
+\midrule
+\endhead
+\path{t}, \path{step} & Saved times and time-step indices. \\
+\path{Nusselt}, \path{Nusselt_raw} & Raw \(1 + \avg{w\theta}_{xyz}\). \\
+\path{Nusselt_dealiased} & Solver-consistent \(1 + \avg{w\theta}_{xy}^{\mathrm{deal}}\). \\
+\path{vol_avg_tw}, \path{vol_avg_tw_raw} & Raw volume-averaged convective flux \(\avg{w\theta}_{xyz}\). \\
+\path{vol_avg_tw_dealiased} & Solver-consistent dealiased volume-averaged convective flux. \\
+\path{heat_flux_mismatch} & Difference between the dealiased and raw volume-averaged heat flux. \\
+\path{max_speed} & \(\max \sqrt{u^2+v^2}\) on the saved nodal/physical grid. \\
+\path{max_w}, \path{max_theta}, \path{max_tw} & Maxima of \(|w|\), \(|\theta|\), and \(|w\theta|\) on the saved nodal/physical grid. \\
+\path{q_rms}, \path{w_rms}, \path{th_rms} & RMS values from depth-integrated, horizontally Parseval-weighted quadratic norms. \\
+\path{th_bar_max} & Maximum absolute Chebyshev coefficient of \(\Theta_{\mathrm{bar}}^{\prime}\), not a physical-space maximum. \\
+\path{th_bar_phys_max}, \path{dth_bar_dz_max} & Physical-space maxima of \(|\Theta_{\mathrm{bar}}^{\prime}|\) and \(|\partial_z\Theta_{\mathrm{bar}}^{\prime}|\). \\
+\path{mean_grad_min}, \path{mean_grad_mid}, \path{mean_grad_max} & Min, midplane value, and max of \(1-\partial_z\Theta_{\mathrm{bar}}^{\prime}\). \\
+\path{mean_energy}, \path{mean_flux_exchange_tendency}, \path{mean_diffusion_tendency}, \path{mean_total_tendency} & Global mean-reservoir quadratic energy and its split tendencies. \\
+\path{th_mean_feedback_sum}, \path{th_mean_feedback_sum_dealiased} & Raw and dealiased fluctuation-side thermal exchange sums. \\
+\path{mean_theta_exchange_residual}, \path{mean_theta_exchange_residual_dealiased} & Raw and dealiased fluctuation/mean exchange residuals. \\
+\path{vert_mode} & Integer Chebyshev mode index \(n=0,\dots,N_z\). \\
+\path{q_vert_spec}, \path{w_vert_spec}, \path{th_vert_spec} & Raw vertical Chebyshev coefficient norms. \\
+\path{k_bins} & Horizontal shell centers \(\kbm=(m+\tfrac12)\Delta k\). \\
+\path{q_horiz_spec}, \path{w_horiz_spec}, \path{th_horiz_spec} & Depth-integrated shell amplitudes of \(q\), \(w\), \(\theta\), without \(N_x^{-4}\) normalization. \\
+\path{ke_horiz_spec} & Physically normalized shellwise kinetic-energy spectrum. \\
+\path{ke_*_shell_tendency} & Signed shell contributions to \(\dd(\tfrac12\|\nabla_h\psi\|^2)/\dd t\). \\
+\path{w_*_shell_tendency} & Signed shell contributions to \(\dd(\tfrac12\|w\|^2)/\dd t\). \\
+\path{th_*_shell_tendency} & Raw signed shell contributions to \(\dd(\tfrac12\|\theta\|^2)/\dd t\). \\
+\path{heat_flux_shell_dealiased}, \path{th_*_shell_tendency_dealiased}, \path{w_buoyancy_shell_tendency_dealiased} & Solver-consistent dealiased thermal shell diagnostics built from the mean-equation heat-flux path. \\
+\path{ke_nonlinear_flux}, \path{w_nonlinear_flux}, \path{th_nonlinear_flux} & Cumulative shellwise nonlinear fluxes, defined as minus the cumulative sum of the corresponding nonlinear shell tendency. \\
+\bottomrule
+\end{longtable}
+
+\section{Practical reading guide}
+
+For the current budget archives, the cleanest interpretation route is:
+\begin{enumerate}
+\item use \path{w_vertical_spectrum_vs_time.png} and
+  \path{w_horizontal_spectrum_vs_time.png} for a quick view of where amplitude
+  is moving;
+\item use the \path{ke_budget_plots/*_heatmap.png} files to identify which
+  shellwise source terms are growing, at which times and horizontal shells;
+\item use \path{dominant_shell/dominant_shell_timeseries.png} and
+  \path{dominant_shell/dominant_shell_summary.md} to inspect the exact
+  low-shell pathway at the shell selected by the dominant KE stretching signal.
+\end{enumerate}
+
+The important distinction is that the spectrum PNGs are nonnegative log-heatmaps
+of stored amplitudes, whereas the budget PNGs are signed symlog visualizations
+of shellwise source/sink terms.
+
+\end{document}

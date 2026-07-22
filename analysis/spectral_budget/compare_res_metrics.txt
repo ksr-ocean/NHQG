@@ -1,0 +1,11 @@
+wrote compare_resolutions.png
+
+convergence metrics (max |log10 ratio| over plotted shells/modes):
+  64^2 (t=40-80) vs 128^2 (t=40-80): E(k)   max|log10 ratio| = 0.238 (x1.73)
+  64^2 (t=40-80) vs 128^2 (t=40-80): Th(k)  max|log10 ratio| = 1.130 (x13.50)
+  64^2 (t=40-80) vs 128^2 (t=40-80): E_m    max|log10 ratio| = 0.339 (x2.18)
+  64^2 (t=40-80) vs 128^2 (t=40-80): Th_m   max|log10 ratio| = 2.534 (x341.84)
+  128^2 (t=40-80) vs 256^2 (t=43-63): E(k)   max|log10 ratio| = 0.102 (x1.26)
+  128^2 (t=40-80) vs 256^2 (t=43-63): Th(k)  max|log10 ratio| = 0.067 (x1.17)
+  128^2 (t=40-80) vs 256^2 (t=43-63): E_m    max|log10 ratio| = 0.642 (x4.39)
+  128^2 (t=40-80) vs 256^2 (t=43-63): Th_m   max|log10 ratio| = 0.367 (x2.33)

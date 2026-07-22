@@ -1,0 +1,15 @@
+wrote compare_64_development.png
+
+convergence metrics (max |log10 ratio| over plotted shells/modes):
+  t=10-20 vs t=20-30: E(k)   max|log10 ratio| = 0.410 (x2.57)
+  t=10-20 vs t=20-30: Th(k)  max|log10 ratio| = 0.408 (x2.56)
+  t=10-20 vs t=20-30: E_m    max|log10 ratio| = 3.600 (x3983.17)
+  t=10-20 vs t=20-30: Th_m   max|log10 ratio| = 2.803 (x634.87)
+  t=20-30 vs t=30-40: E(k)   max|log10 ratio| = 0.306 (x2.02)
+  t=20-30 vs t=30-40: Th(k)  max|log10 ratio| = 0.508 (x3.22)
+  t=20-30 vs t=30-40: E_m    max|log10 ratio| = 1.533 (x34.11)
+  t=20-30 vs t=30-40: Th_m   max|log10 ratio| = 1.610 (x40.74)
+  t=30-40 vs t=40-80: E(k)   max|log10 ratio| = 0.454 (x2.85)
+  t=30-40 vs t=40-80: Th(k)  max|log10 ratio| = 0.514 (x3.26)
+  t=30-40 vs t=40-80: E_m    max|log10 ratio| = 1.788 (x61.38)
+  t=30-40 vs t=40-80: Th_m   max|log10 ratio| = 0.714 (x5.18)

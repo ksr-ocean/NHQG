@@ -1,0 +1,2 @@
+"""Trigonometric vertical benchmark solver."""
+

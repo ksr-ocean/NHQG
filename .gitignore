@@ -1,0 +1,26 @@
+# Run data — never commit (310+ GB)
+output/
+derived_checkpoints/
+dedalus_benchmark_standard_f/output*/
+fd_vertical_benchmark/output*/
+
+# Logs (run logs and LaTeX logs)
+*.log
+
+# LaTeX build artifacts
+*.aux
+*.out
+*.toc
+*.synctex.gz
+
+# PDFs (built docs + reference papers; sources are tracked)
+*.pdf
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Editor/OS noise
+*.swp
+.DS_Store

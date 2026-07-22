@@ -1,0 +1,1041 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black}
+
+\newcommand{\pderiv}[2]{\frac{\partial #1}{\partial #2}}
+\newcommand{\Rav}{\widetilde{\mathrm{Ra}}}
+\newcommand{\Ek}{\mathrm{Ek}}
+\newcommand{\Ro}{\mathrm{Ro}}
+\renewcommand{\Pr}{\mathrm{Pr}}
+\newcommand{\Ld}{L_d}
+\newcommand{\Lc}{L_c}
+\newcommand{\kh}{|\bm{k}|}
+\newcommand{\Jac}[2]{J\!\left[#1,\,#2\right]}
+\newcommand{\avg}[1]{\langle #1 \rangle}
+\newcommand{\hhat}[1]{\widehat{#1}}
+\newcommand{\Tn}{T_n}
+\newcommand{\Dmat}{\mathcal{D}}
+\newcommand{\Dvec}{\bm{D}}
+
+\title{\textbf{Nonhydrostatic Quasi-Geostrophic Equations\\[4pt]
+with $\beta$-Effect and $L_d$}\\[8pt]
+\large Chebyshev Collocation Formulation for GPU-Pseudospectral Implementation}
+\author{}
+\date{February 2026}
+
+\begin{document}
+\maketitle
+%\tableofcontents
+\vspace{1em}
+
+%======================================================================
+\section{Physical Setting and Governing Equations}
+%======================================================================
+
+We consider rapidly rotating Rayleigh--B\'enard convection in the asymptotic limit $\Ek \to 0$, following the program of Julien, Knobloch and collaborators. The key modification to the standard NHQGE of Julien et al.\ (1998, TCFD; 2012, PRL) is the replacement of relative vorticity $\zeta$ by a quasi-geostrophic potential vorticity $q$ that includes: (i) a background PV gradient $\beta$, and (ii) a vortex stretching term $-\psi/\Ld^2$ associated with a finite deformation radius $\Ld$.
+
+\subsection{Asymptotic scaling}
+
+The NHQGE arise from an asymptotic expansion of the rotating Boussinesq equations in the small parameter $\epsilon = \Ek^{1/3}$, where $\Ek = \nu/(2\Omega h^2)$ is the Ekman number based on the layer depth $h$ and rotation rate $\Omega$. The distinguished scalings are:
+\begin{align}
+(x,y) &\sim \epsilon\, h = \Ek^{1/3} h = \Lc, \\
+Z &\sim h, \\
+t &\sim \frac{1}{2\Omega\,\epsilon^2} = \frac{h^2}{\nu\,\Ek^{-1/3}},\\
+\psi &\sim \frac{\nu}{\Ek^{1/3}},
+\end{align}
+where $\Lc = \Ek^{1/3}h$ is the natural convective horizontal scale and the time scale is the convective turnover time at leading order.
+
+\subsection{The modified NHQGE system}
+
+Define the potential vorticity perturbation (periodic part):
+\begin{equation}
+\boxed{q' \;=\; \nabla_\perp^2\psi \;-\; \frac{\psi}{\Ld^2}}
+\label{eq:pv_def}
+\end{equation}
+so that the total PV is $q = q' + \beta y$.
+
+The streamfunction is recovered from $q'$ via spectral inversion in the horizontal:
+\begin{equation}
+\boxed{\hhat{\psi}(\bm{k},Z) \;=\; \frac{-\hhat{q}'(\bm{k},Z)}{\kh^2 + \Ld^{-2}}}
+\label{eq:inversion}
+\end{equation}
+where $\bm{k} = (k_x, k_y)$ and $\kh^2 = k_x^2 + k_y^2$. This inversion is \emph{pointwise in $Z$}: no vertical coupling is introduced. In the limit $\Ld \to \infty$, it reduces to $\hhat\psi = -\hhat{q}'/\kh^2$.
+
+The three prognostic equations are:
+
+\vspace{0.5em}
+\noindent\textbf{PV equation} (replaces the vorticity equation):
+\begin{equation}
+\boxed{\pderiv{q'}{t} + \Jac{\psi}{q'} + \beta\,\pderiv{\psi}{x} - \pderiv{w}{Z} = \nu_q\,\mathcal{D}_q[q']}
+\label{eq:pv}
+\end{equation}
+
+\noindent\textbf{Vertical velocity equation:}
+\begin{equation}
+\boxed{\pderiv{w}{t} + \Jac{\psi}{w} + \pderiv{\psi}{Z} = \frac{\Rav}{\sigma}\,\theta + \nu_w\,\mathcal{D}_w[w]}
+\label{eq:w}
+\end{equation}
+
+\noindent\textbf{Temperature perturbation equation:}
+\begin{equation}
+\boxed{\pderiv{\theta}{t} + \Jac{\psi}{\theta} + w\,\pderiv{\bar\Theta}{Z} = \frac{\nu_\theta}{\sigma}\,\mathcal{D}_\theta[\theta]}
+\label{eq:theta}
+\end{equation}
+
+Here:
+\begin{itemize}[nosep]
+\item $\Jac{A}{B} = \partial_x A\,\partial_y B - \partial_y A\,\partial_x B$ is the horizontal Jacobian,
+\item $\Rav = \mathrm{Ra}\,\Ek^{4/3}$ is the reduced Rayleigh number (the single control parameter for convective supercriticality),
+\item $\sigma = \nu/\kappa$ is the Prandtl number,
+\item $\bar\Theta(Z,t)$ is the horizontal-mean temperature profile,
+\item $\mathcal{D}$ denotes the dissipation operators (Section~\ref{sec:dissipation}).
+\end{itemize}
+
+\subsection{Mean temperature profile}
+\label{sec:mean_temp}
+
+The total temperature is decomposed as $T = \bar\Theta(Z,t) + \theta(x,y,Z,t)$, where $\bar\Theta$ is the horizontal mean and $\theta$ is the perturbation with zero horizontal mean. The horizontal-mean temperature satisfies (Miquel et al.\ 2026, eq.\ 3.1d):
+\begin{equation}
+\boxed{
+\epsilon^{-2}\pderiv{\bar\Theta}{t} + \pderiv{}{Z}\avg{w\theta}_{xy} = \frac{1}{\sigma}\pderiv{^2\bar\Theta}{Z^2}
+}
+\label{eq:thetabar}
+\end{equation}
+where $\avg{\cdot}_{xy}$ is the horizontal average, $\epsilon = \mathrm{Ek}^{1/3}$ is the small asymptotic parameter, and the factor $\epsilon^{-2}$ reflects the slow-time-scale evolution of the mean profile.
+
+\noindent\textbf{Boundary conditions:} $\bar\Theta(0,t) = 1$ (hot bottom), $\bar\Theta(1,t) = 0$ (cold top). It is convenient to write $\bar\Theta = (1-Z) + \bar\Theta'$, where $\bar\Theta'$ is the \emph{deviation} from the conduction profile, satisfying $\bar\Theta'(0,t) = \bar\Theta'(1,t) = 0$.
+
+The perturbation equation \eqref{eq:theta} depends on $\partial_Z\bar\Theta$: for the conduction profile $\bar\Theta = 1-Z$, $\partial_Z\bar\Theta = -1$ and the source term is $+w$. When $\bar\Theta$ evolves, the source becomes $(1 - \partial_Z\bar\Theta)\,w = (1 - (-1 + \partial_Z\bar\Theta'))\,w = (2 - \partial_Z\bar\Theta')\,w$... more precisely, $-w\,\partial_Z\bar\Theta = w(1 - \partial_Z\bar\Theta')$.
+
+\noindent\textbf{Two closure modes:}
+\begin{enumerate}[nosep]
+\item \texttt{fixed\_conduction}: $\bar\Theta \equiv 1 - Z$ (Rubio et al.\ 2014 setup). The perturbation equation simplifies to $\partial_t\theta = \ldots + w$.
+\item \texttt{evolve\_mean}: $\bar\Theta$ evolves prognostically via \eqref{eq:thetabar}. The convective heat flux $\avg{w\theta}_{xy}$ feeds back onto the mean temperature profile, modifying the driving of convection. The diffusion term $\sigma^{-1}\partial_{ZZ}\bar\Theta$ is treated implicitly (see Section~\ref{sec:imex}).
+\end{enumerate}
+
+\noindent\textbf{Implementation:} The convective flux $\avg{w\theta}_{xy}(Z_j)$ is computed by transforming $w$ and $\theta$ to physical space at each CGL point, multiplying, and averaging over $(x,y)$. The vertical derivative $\partial_Z\avg{w\theta}$ and diffusion $\partial_{ZZ}\bar\Theta$ are computed via the collocation matrices $\Dvec_Z$ and $\Dvec_Z^{(2)}$.
+
+\subsection{Boundary conditions}
+\label{sec:bcs}
+
+\begin{center}
+\begin{tabular}{lllll}
+\toprule
+Field & $Z = 0$ (top) & $Z = 1$ (bottom) & Type & Horizontal \\
+\midrule
+$w$ & $w = 0$ & $w = 0$ & Dirichlet & doubly periodic \\
+$\theta$ & $\theta = 0$ & $\theta = 0$ & Dirichlet & doubly periodic \\
+$q'$ & $\partial_Z q' = 0$ & $\partial_Z q' = 0$ & Neumann & doubly periodic \\
+$\psi$ & $\partial_Z \psi = 0$ & $\partial_Z \psi = 0$ & (derived) & doubly periodic \\
+$\bar\Theta$ & $\bar\Theta = 1$ & $\bar\Theta = 0$ & Dirichlet & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textbf{Key point on the stress-free condition.} The stress-free condition requires $\partial_Z u = \partial_Z v = 0$ at $Z = 0, 1$. Since $(u,v) = (-\psi_y, \psi_x)$, this implies $\partial_Z \psi = 0$ at the boundaries. Because the inversion \eqref{eq:inversion} is pointwise in $Z$ (i.e.\ $\hhat\psi = -\hhat{q}'/(\kh^2 + \Ld^{-2})$ at every $Z$), the condition $\partial_Z \psi = 0$ translates directly to:
+\begin{equation}
+\partial_Z q' = 0 \quad\text{at}\quad Z = 0,\,1.
+\label{eq:neumann_qprime}
+\end{equation}
+
+
+
+%======================================================================
+\section{Nondimensional Parameters}
+\label{sec:params}
+%======================================================================
+
+\begin{center}
+\begin{tabular}{clll}
+\toprule
+Symbol & Name & Definition & Role \\
+\midrule
+$\Rav$ & Reduced Rayleigh number & $\mathrm{Ra}\,\Ek^{4/3}$ & Convective supercriticality \\
+$\sigma$ & Prandtl number & $\nu/\kappa$ & Diffusivity ratio \\
+$\beta$ & PV gradient & (dimensional: $df/dy$, see \S\ref{sec:jupiter}) & Anisotropy of inverse cascade \\
+$\Ld$ & Deformation radius & (in units of $\Lc$) & Cascade arrest scale \\
+$L$ & Domain size & (in units of $\Lc$) & Scale separation \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The onset of convection occurs at $\Rav_c = 3(2\pi^2)^{2/3}/2 \approx 8.6956$ with critical horizontal wavenumber $k_c = (2\pi^2)^{1/6}/\sqrt{2} \approx 1.3048$ (for stress-free boundaries).
+
+The physically interesting regime is $\Rav/\Rav_c \gg 1$ (geostrophic turbulence), where the flow is dominated by convective columns that undergo an inverse energy cascade. Rubio et al.\ (2014) used $\Rav = 100$ (supercriticality $\approx 11.5$) on a domain of size $20\Lc \times 20\Lc$.
+
+The new parameters $\beta$ and $\Ld$ control what the inverse cascade produces:
+\begin{itemize}[nosep]
+\item $\beta = 0$, $\Ld = \infty$: isotropic condensation $\to$ domain-filling dipolar vortex (Rubio et al.\ 2014).
+\item $\beta = 0$, $\Ld$ finite: condensation arrested at $\sim\Ld$ $\to$ finite-size vortices.
+\item $\beta > 0$, $\Ld = \infty$: anisotropic cascade $\to$ zonal jets at Rhines scale $L_\beta = \sqrt{U/\beta}$.
+\item $\beta > 0$, $\Ld$ finite: cascade interacts with both scales $\to$ jets, vortices, or crystals depending on parameter regime.
+\end{itemize}
+
+
+%======================================================================
+\section{Chebyshev Vertical Representation}
+\label{sec:vertical}
+%======================================================================
+The approach here, Chebyshev-tau on Gauss-Lobatto points, is all standard stuff, but it was helpful for me to spell everything out, both for making sure of a direct translation and debugging through LLMs.
+\subsection{Coordinate mapping}
+
+We map the physical depth coordinate $Z \in [0, 1]$ to the Chebyshev coordinate $\xi \in [-1, 1]$ via:
+\begin{equation}
+\xi = 2Z - 1, \qquad Z = \frac{\xi + 1}{2},
+\label{eq:xi_map}
+\end{equation}
+so that $Z = 0 \;\Leftrightarrow\; \xi = -1$ (top) and $Z = 1 \;\Leftrightarrow\; \xi = +1$ (bottom). The derivative transforms as:
+\begin{equation}
+\pderiv{}{Z} = 2\,\pderiv{}{\xi}.
+\label{eq:dZ_dxi}
+\end{equation}
+
+\subsection{Chebyshev--Gauss--Lobatto collocation grid}
+
+All fields are represented at the $N_Z + 1$ Chebyshev--Gauss--Lobatto (CGL) points:
+\begin{equation}
+\xi_j = \cos\!\left(\frac{\pi j}{N_Z}\right), \qquad j = 0, 1, \ldots, N_Z,
+\label{eq:cgl_points}
+\end{equation}
+which in the physical coordinate are:
+\begin{equation}
+Z_j = \frac{1}{2}\!\left(1 + \cos\!\frac{\pi j}{N_Z}\right), \qquad j = 0, 1, \ldots, N_Z.
+\end{equation}
+Note: $j = 0 \;\Rightarrow\; \xi_0 = +1 \;\Rightarrow\; Z_0 = 1$ (bottom), and $j = N_Z \;\Rightarrow\; \xi_{N_Z} = -1 \;\Rightarrow\; Z_{N_Z} = 0$ (top). This is the standard Chebyshev ordering where the first index is at $\xi = +1$.
+
+The clustering of CGL points near the boundaries ($Z = 0$ and $Z = 1$) is advantageous for resolving thin thermal boundary layers at high $\Rav$.
+
+\subsection{Chebyshev expansion and transforms}
+
+A field $f(Z)$ evaluated at the CGL grid is associated with Chebyshev coefficients $\hat{f}_n$ via:
+\begin{equation}
+f(\xi_j) = \sum_{n=0}^{N_Z} \hat{f}_n\, T_n(\xi_j), \qquad j = 0, \ldots, N_Z,
+\label{eq:cheb_expansion}
+\end{equation}
+where $T_n(\xi) = \cos(n\,\mathrm{arccos}\,\xi)$ is the $n$th Chebyshev polynomial. The inverse (analysis) transform exploits the identity $T_n(\xi_j) = \cos(n\pi j/N_Z)$, so both the forward and inverse transforms are real-valued type-I DCTs of length $N_Z + 1$:
+\begin{align}
+\hat{f}_n &= \frac{2}{c_n N_Z} \sum_{j=0}^{N_Z} \frac{1}{c_j}\, f(\xi_j)\,\cos\!\frac{n\pi j}{N_Z}, \label{eq:analysis}\\
+f(\xi_j) &= \sum_{n=0}^{N_Z} \hat{f}_n\,\cos\!\frac{n\pi j}{N_Z}, \label{eq:synthesis}
+\end{align}
+where $c_0 = c_{N_Z} = 2$ and $c_j = 1$ otherwise.
+
+\textbf{Implementation:} Use \texttt{scipy.fft.dct} (type I) or, on GPU, implement via a real FFT of an appropriately reflected length-$2N_Z$ sequence. JAX and PyTorch provide batched FFT routines that make this efficient.
+
+\subsection{Chebyshev differentiation matrix}
+\label{sec:diffmat}
+
+The first-derivative operator in the $\xi$ coordinate, acting on values at CGL points, is the $(N_Z+1) \times (N_Z+1)$ Chebyshev differentiation matrix $\Dvec_\xi$ with entries:
+\begin{equation}
+(\Dvec_\xi)_{ij} = \begin{cases}
+\displaystyle\frac{c_i}{c_j}\,\frac{(-1)^{i+j}}{\xi_i - \xi_j}, & i \ne j,\\[8pt]
+\displaystyle -\frac{\xi_j}{2(1-\xi_j^2)}, & 1 \le i = j \le N_Z - 1,\\[8pt]
+\displaystyle \frac{2N_Z^2 + 1}{6}, & i = j = 0,\\[8pt]
+\displaystyle -\frac{2N_Z^2 + 1}{6}, & i = j = N_Z,
+\end{cases}
+\label{eq:cheb_diffmat}
+\end{equation}
+where $c_0 = c_{N_Z} = 2$ and $c_j = 1$ for $1 \le j \le N_Z - 1$.
+
+The physical-coordinate derivative is then:
+\begin{equation}
+\Dvec_Z = 2\,\Dvec_\xi,
+\label{eq:DZ}
+\end{equation}
+and higher derivatives are represented by their own collocation operators. In particular, for second derivatives one should construct $\Dvec_\xi^{(2)}$ directly from the Chebyshev differentiation recurrence (or equivalently by differentiating in coefficient space twice), rather than forming it by squaring $\Dvec_\xi$.
+
+\textbf{Precomputation:} $\Dvec_Z$ is a dense $(N_Z+1)\times(N_Z+1)$ matrix, precomputed once at initialization. For typical $N_Z = 32$--$128$, the matrix--vector product is $O(N_Z^2)$ per horizontal wavenumber, which is negligible compared to horizontal FFT costs.
+
+\subsection{Numerical pitfall: constructing the second derivative}
+\label{sec:d2_pitfall}
+
+A subtle but important implementation point is that the nodal second-derivative operator should \emph{not} be formed as
+\begin{equation}
+\Dvec_Z^{(2)} \stackrel{\mathrm{bad}}{=} \Dvec_Z\,\Dvec_Z.
+\end{equation}
+In exact arithmetic on the polynomial interpolation space this identity is formally correct, but in floating-point arithmetic it is often the \emph{least robust} way to realize the operator numerically. The reason is that the first-derivative Chebyshev collocation matrix is already strongly ill-conditioned at moderate and large $N_Z$, and explicitly squaring it amplifies roundoff and cancellation errors.
+
+For the present problem this matters because the vertical implicit solve involves matrices of the form
+\begin{equation}
+A(\bm{k}) = I - \alpha(\bm{k})\,\Dvec_Z^{(2)},
+\end{equation}
+with $\alpha(\bm{k}) \propto \Delta t^2/(\kh^2+\Ld^{-2})$. If $\Dvec_Z^{(2)}$ is built by squaring $\Dvec_Z$, then high-order vertical modes can acquire spurious numerical contamination that is small in low-resolution tests but becomes significant in long integrations or at the larger values of $N_Z$ needed for quantitative comparison with reference simulations.
+
+The remedy adopted here is to construct $\Dvec_\xi^{(2)}$ \emph{directly} in Chebyshev coefficient space:
+\begin{enumerate}[nosep]
+\item map nodal values on the CGL grid to Chebyshev coefficients,
+\item apply the coefficient-space differentiation recurrence twice,
+\item map the resulting second-derivative coefficients back to nodal values.
+\end{enumerate}
+This yields a dedicated second-derivative collocation matrix $\Dvec_\xi^{(2)}$, from which the physical-coordinate operator follows as
+\begin{equation}
+\Dvec_Z^{(2)} = 4\,\Dvec_\xi^{(2)}.
+\end{equation}
+This direct construction is mathematically equivalent to the desired second derivative, but numerically much better behaved than explicitly forming $\Dvec_Z^2$. In the current code, the precomputed array \texttt{D\_Z\_sq} is now built in this direct way.
+
+\subsection{DCT-I analytic inverse for the Chebyshev Vandermonde}
+\label{sec:dct_inverse}
+
+The coefficient-space construction requires mapping between nodal values on CGL points and Chebyshev coefficients. The Vandermonde matrix $V$ with entries
+\begin{equation}
+V_{jn} = T_n(\xi_j) = \cos\!\frac{n\pi j}{N_Z}, \qquad j, n = 0, \ldots, N_Z,
+\end{equation}
+maps coefficients to nodal values: $\bm{f}_{\mathrm{nodal}} = V\,\hat{\bm{f}}$. The inverse transform (nodal to coefficient) requires $V^{-1}$.
+
+Rather than using a general-purpose matrix inverse (which is unnecessary and introduces floating-point error at large $N_Z$), we exploit the discrete orthogonality of the DCT-I. The exact inverse is:
+\begin{equation}
+\boxed{
+(V^{-1})_{nj} = \frac{2}{N_Z\,c_n\,c_j}\,\cos\!\frac{n\pi j}{N_Z}
+}
+\label{eq:dct_inverse}
+\end{equation}
+where $c_0 = c_{N_Z} = 2$ and $c_k = 1$ for $1 \le k \le N_Z - 1$. This follows from the orthogonality relation for the type-I discrete cosine transform:
+\begin{equation}
+\sum_{j=0}^{N_Z} \frac{1}{c_j}\,\cos\!\frac{m\pi j}{N_Z}\,\cos\!\frac{n\pi j}{N_Z} = \frac{N_Z\,c_n}{2}\,\delta_{mn}.
+\end{equation}
+
+The full coefficient-space second-derivative matrix is then:
+\begin{equation}
+\Dvec_\xi^{(2)} = V\,G^2\,V^{-1},
+\end{equation}
+where $G$ is the Chebyshev coefficient differentiation matrix (mapping $\hat{f}_n \to \hat{f}'_n$ via the standard recurrence $c_n \hat{f}'_n = 2n\hat{f}_n + \hat{f}'_{n+2}$), and $V^{-1}$ is given by \eqref{eq:dct_inverse}.
+
+\textbf{Numerical advantage:} The analytic inverse \eqref{eq:dct_inverse} is exact to machine precision for all $N_Z$, whereas \texttt{np.linalg.inv(V)} accumulates roundoff error that grows with $N_Z$. For $N_Z \gtrsim 64$, this difference becomes visible in the entries of $\Dvec_Z^{(2)}$ and propagates into the IMEX matrices $A(\bm{k})$.
+
+
+%======================================================================
+\section{Boundary Condition Enforcement: Tau Method}
+\label{sec:tau}
+%======================================================================
+
+The Chebyshev basis does not inherently satisfy any boundary conditions. We enforce them via the \emph{tau method}: the evolution equations are applied at interior collocation points only, and the boundary rows are replaced by the explicit boundary conditions.
+
+\subsection{Dirichlet conditions on $w$ and $\theta$}
+
+At the boundary points $j = 0$ ($Z = 1$, bottom) and $j = N_Z$ ($Z = 0$, top), instead of evolving $w$ and $\theta$ via their PDEs, we impose:
+\begin{equation}
+w(\xi_0) = 0, \quad w(\xi_{N_Z}) = 0, \qquad \theta(\xi_0) = 0, \quad \theta(\xi_{N_Z}) = 0.
+\end{equation}
+In practice, this means:
+\begin{enumerate}[nosep]
+\item Compute the full RHS of the $w$ and $\theta$ equations at all $N_Z + 1$ collocation points.
+\item Overwrite the RHS at $j = 0$ and $j = N_Z$ with zero (so the boundary values do not change from their initial zero state).
+\end{enumerate}
+This is the simplest form of the tau method for Dirichlet conditions: the boundary values are \emph{clamped}.
+
+\subsection{Neumann conditions on $q'$ (stress-free)}
+\label{sec:neumann_tau}
+
+The stress-free condition requires $\partial_Z q' = 0$ at $Z = 0$ and $Z = 1$, i.e.:
+\begin{equation}
+\sum_{i=0}^{N_Z} (\Dvec_Z)_{0,i}\, q'(\xi_i) = 0, \qquad
+\sum_{i=0}^{N_Z} (\Dvec_Z)_{N_Z,i}\, q'(\xi_i) = 0.
+\label{eq:neumann_collocation}
+\end{equation}
+
+These are two linear constraints on the $N_Z + 1$ boundary and interior values. We solve for the two boundary values ($q'_0 \equiv q'(\xi_0)$ and $q'_{N_Z} \equiv q'(\xi_{N_Z})$) in terms of the $N_Z - 1$ interior values, by inverting the $2 \times 2$ system:
+\begin{equation}
+\begin{pmatrix}
+D_{0,0} & D_{0,N_Z} \\
+D_{N_Z,0} & D_{N_Z,N_Z}
+\end{pmatrix}
+\begin{pmatrix}
+q'_0 \\ q'_{N_Z}
+\end{pmatrix}
+= -
+\begin{pmatrix}
+\sum_{i=1}^{N_Z-1} D_{0,i}\, q'_i \\[4pt]
+\sum_{i=1}^{N_Z-1} D_{N_Z,i}\, q'_i
+\end{pmatrix},
+\label{eq:neumann_2x2}
+\end{equation}
+where $D_{ij} \equiv (\Dvec_Z)_{ij}$.
+
+Define the precomputed quantities:
+\begin{equation}
+\bm{M} = \begin{pmatrix} D_{0,0} & D_{0,N_Z} \\ D_{N_Z,0} & D_{N_Z,N_Z} \end{pmatrix}^{-1}, \qquad
+\bm{d}_{\mathrm{top}} = (D_{0,1}, \ldots, D_{0,N_Z-1}), \qquad
+\bm{d}_{\mathrm{bot}} = (D_{N_Z,1}, \ldots, D_{N_Z,N_Z-1}).
+\label{eq:neumann_precompute}
+\end{equation}
+The $2\times 2$ matrix $\bm{M}$ and the two interior-weight vectors are computed once at initialization.
+
+\textbf{Procedure at each time step (or each RK4 sub-step):}
+\begin{enumerate}[nosep]
+\item Evolve $q'$ at interior points $j = 1, \ldots, N_Z - 1$ using the PV equation~\eqref{eq:pv}.
+\item Recover the boundary values:
+\begin{equation}
+\begin{pmatrix} q'_0 \\ q'_{N_Z} \end{pmatrix} = -\bm{M}\begin{pmatrix} \bm{d}_{\mathrm{top}} \cdot \bm{q}'_{\mathrm{int}} \\ \bm{d}_{\mathrm{bot}} \cdot \bm{q}'_{\mathrm{int}} \end{pmatrix},
+\end{equation}
+where $\bm{q}'_{\mathrm{int}} = (q'_1, \ldots, q'_{N_Z-1})$.
+\end{enumerate}
+
+This ensures the Neumann condition is satisfied exactly at every stage, at the cost of two dot products and a $2\times 2$ solve per horizontal wavenumber (trivially cheap).
+
+
+
+%======================================================================
+\section{Equations at Chebyshev Collocation Points}
+\label{sec:equations_collocation}
+%======================================================================
+
+In the Chebyshev collocation framework, all equations are evaluated pointwise at each CGL grid point $\xi_j$ (or equivalently, $Z_j$). Vertical derivatives are computed via the differentiation matrix $\Dvec_Z$.
+
+Denote the field values at collocation points as vectors:
+\begin{equation}
+\bm{q}' = \big(q'(\xi_0), \ldots, q'(\xi_{N_Z})\big)^T, \quad \text{etc.}
+\end{equation}
+
+\subsection{PV equation at each collocation point}
+
+\begin{equation}
+\boxed{
+\pderiv{q'_j}{t} = -\Jac{\psi_j}{q'_j} - \beta\,\pderiv{\psi_j}{x} + \big(\Dvec_Z\,\bm{w}\big)_j + \nu_q\,\mathcal{D}_q[q'_j]
+}
+\label{eq:pv_colloc}
+\end{equation}
+where $(\Dvec_Z\,\bm{w})_j = \sum_{i=0}^{N_Z} (\Dvec_Z)_{ji}\, w_i$ is the vertical derivative of $w$ evaluated at $\xi_j$.
+
+\emph{BC enforcement:} At $j = 0$ and $j = N_Z$, replace this equation with the Neumann projection (\S\ref{sec:neumann_tau}).
+
+\subsection{Vertical velocity equation at each collocation point}
+
+\begin{equation}
+\boxed{
+\pderiv{w_j}{t} = -\Jac{\psi_j}{w_j} - \big(\Dvec_Z\,\bm{\psi}\big)_j + \frac{\Rav}{\sigma}\,\theta_j + \nu_w\,\mathcal{D}_w[w_j]
+}
+\label{eq:w_colloc}
+\end{equation}
+
+Note the sign: $\partial_Z\psi$ in the original equation~\eqref{eq:w} appears as $+\partial\psi/\partial Z$, so the RHS contribution is $-(\Dvec_Z\,\bm{\psi})_j$ since $\pderiv{\psi}{Z}$ enters with a negative sign upon moving to the RHS. The original equation is:
+\[
+\pderiv{w}{t} + \Jac{\psi}{w} + \pderiv{\psi}{Z} = \frac{\Rav}{\sigma}\,\theta + \mathrm{dissipation},
+\]
+so the RHS is:
+\[
+\text{RHS}_w = -\Jac{\psi}{w} - \pderiv{\psi}{Z} + \frac{\Rav}{\sigma}\,\theta + \mathrm{dissipation}.
+\]
+Hence:
+\begin{equation}
+\pderiv{w_j}{t} = -\Jac{\psi_j}{w_j} - \big(\Dvec_Z\,\bm{\psi}\big)_j + \frac{\Rav}{\sigma}\,\theta_j + \nu_w\,\mathcal{D}_w[w_j].
+\label{eq:w_colloc2}
+\end{equation}
+
+\emph{BC enforcement:} At $j = 0$ and $j = N_Z$, set $\text{RHS} = 0$ (clamping $w = 0$).
+
+\subsection{Temperature equation at each collocation point}
+
+\begin{equation}
+\boxed{
+\pderiv{\theta_j}{t} = -\Jac{\psi_j}{\theta_j} - w_j\,(\partial_Z\bar\Theta)_j + \frac{\nu_\theta}{\sigma}\,\mathcal{D}_\theta[\theta_j]
+}
+\label{eq:theta_colloc}
+\end{equation}
+
+For the conduction profile $\bar\Theta = 1 - Z$, $\partial_Z\bar\Theta = -1$ uniformly, so the buoyancy term is $+w_j$.
+
+\emph{BC enforcement:} At $j = 0$ and $j = N_Z$, set $\text{RHS} = 0$ (clamping $\theta = 0$).
+
+\subsection{Summary of vertical derivative computations}
+
+At each horizontal wavenumber $\bm{k}$ (or at each horizontal grid point in physical space), the required vertical derivatives are:
+\begin{align}
+\big(\Dvec_Z\,\bm{w}\big)_j &= \sum_{i=0}^{N_Z} (\Dvec_Z)_{ji}\, w(\bm{k}, \xi_i), \quad\text{(feeds into $q'$ equation)},\\
+\big(\Dvec_Z\,\bm{\psi}\big)_j &= \sum_{i=0}^{N_Z} (\Dvec_Z)_{ji}\, \psi(\bm{k}, \xi_i), \quad\text{(feeds into $w$ equation)}.
+\end{align}
+These are batched matrix--vector products: reshape the fields as $(\texttt{Nkx}, \texttt{Nky}, N_Z+1)$ and apply $\Dvec_Z$ along the last axis via \texttt{einsum('ij,...j->...i', D\_Z, field)}.
+
+
+%======================================================================
+\section{Horizontal Spectral Representation}
+\label{sec:horizontal}
+%======================================================================
+
+\subsection{Fourier basis}
+
+All fields are doubly periodic on a domain $[0, L] \times [0, L]$. The horizontal spectral representation uses the standard real FFT:
+\begin{equation}
+f(x,y) = \sum_{k_x}\sum_{k_y} \hhat{f}(k_x,k_y)\,e^{i(k_x x + k_y y)}
+\end{equation}
+where $k_x = 2\pi j_x/L$, $k_y = 2\pi j_y/L$, $j_x \in \{0, \ldots, N_x-1\}$, $j_y \in \{0, \ldots, N_x/2\}$ (using the real-to-complex convention). Zero mean is enforced: $\hhat{f}(0,0) = 0$ for all prognostic fields.
+
+\subsection{Jacobian evaluation}
+
+The Jacobian $\Jac{A}{B} = A_x B_y - A_y B_x$ is computed pseudospectrally with 3/2-rule dealiasing in the horizontal:
+\begin{enumerate}[nosep]
+\item Compute $\hhat{A}_x = ik_x\hhat{A}$, $\hhat{A}_y = ik_y\hhat{A}$, $\hhat{B}_x = ik_x\hhat{B}$, $\hhat{B}_y = ik_y\hhat{B}$.
+\item Zero-pad each to $(3N_x/2) \times (3N_x/2)$ grid and inverse FFT.
+\item Multiply in physical space: $J_{\mathrm{phys}} = A_x B_y - A_y B_x$.
+\item Forward FFT and truncate to original $(N_x, N_x/2+1)$ grid, with normalization correction factor $(3/2)^{2} = 9/4$ (see CLAUDE.md for discussion of FFT convention).
+\end{enumerate}
+
+\subsection{The $\beta$ term}
+
+The $\beta$ term in \eqref{eq:pv_colloc} is linear and diagonal in spectral space:
+\begin{equation}
+\widehat{\beta\,\psi_x}(\bm{k}, Z_j) = i\beta\, k_x\, \hhat\psi(\bm{k}, Z_j).
+\end{equation}
+No dealiasing or transform required.
+
+\subsection{No vertical dealiasing needed}
+\label{sec:no_vert_dealiasing}
+
+A key advantage of the Chebyshev collocation approach: the nonlinear products $\Jac{\psi}{q'}$, $\Jac{\psi}{w}$, and $\Jac{\psi}{\theta}$ are evaluated \emph{at fixed $Z_j$}. There is no vertical spectral transform in the Jacobian evaluation loop---each CGL point is treated independently. Therefore:
+\begin{itemize}[nosep]
+\item No 3/2-rule padding in the vertical direction.
+\item No forward/inverse DST or DCT during the Jacobian step.
+\item The vertical coupling enters \emph{only} through the differentiation matrix $\Dvec_Z$, which is a linear operation (no aliasing).
+\end{itemize}
+This eliminates the vertical dealiasing bookkeeping that the sin/cosine modal approach requires.
+
+
+%======================================================================
+\section{Dissipation}
+\label{sec:dissipation}
+%======================================================================
+
+All dissipation operators act only in the horizontal and are handled identically to the sin/cosine formulation.
+
+\subsection{Baroclinic fields ($w$, $\theta$)}
+
+Standard Laplacian diffusion (as in Julien et al.):
+\begin{equation}
+\mathcal{D}[f] = \nabla_\perp^2 f \qquad\Longrightarrow\qquad \widehat{\mathcal{D}[f]} = -\kh^2\,\hhat{f}.
+\end{equation}
+Applied at every CGL point independently.
+
+\subsection{PV field ($q'$)}
+
+\noindent\textbf{Hyperviscosity} (small-scale dissipation of forward enstrophy cascade):
+\begin{equation}
+\mathcal{D}_{\mathrm{hyper}}[q'] = (-1)^{p+1}\nu_p\,\nabla_\perp^{2p} q' \qquad\Longrightarrow\qquad -\nu_p\,\kh^{2p}\,\hhat{q}'.
+\end{equation}
+Standard choice: $p = 4$ (bilaplacian hyperviscosity), with $\nu_p$ set so that the $e$-folding time at the grid-scale wavenumber $k_{\max} = \pi N_x/L$ is a few time steps.
+
+\noindent\textbf{Large-scale drag} (optional):
+\begin{equation}
+\mathcal{D}_{\mathrm{drag}}[q'] = -r\,q' \qquad\text{or}\qquad -\mu\,\nabla_\perp^{-2}q'.
+\end{equation}
+
+\subsection{Dissipation rates}
+\label{sec:diss_rates}
+
+Define the dissipation rate at each horizontal wavenumber $\bm{k}$ for each field:
+\begin{align}
+\lambda_q(\bm{k}) &= \nu_q\,\kh^{2p} + r, \label{eq:diss_rate_q}\\
+\lambda_w(\bm{k}) &= \nu_w\,\kh^{2}, \label{eq:diss_rate_w}\\
+\lambda_\theta(\bm{k}) &= \frac{\nu_\theta}{\sigma}\,\kh^{2}. \label{eq:diss_rate_th}
+\end{align}
+Note that $w$ and $\theta$ always receive Laplacian diffusion (as in Section~\ref{sec:dissipation}), while $q'$ receives hyperviscosity of order $p$ to control the forward enstrophy cascade.
+These rates are diagonal in spectral space and independent of $Z$; they are precomputed once at initialization.
+
+\subsection{Unified IMEX treatment of dissipation}
+\label{sec:diss_imex}
+
+Rather than applying dissipation as a post-step exponential multiplier (which introduces a Lie splitting error of $O(\Delta t)$ and degrades the IMEX scheme to first order), all dissipation terms are folded into the IMEX implicit system. This preserves the second-order accuracy of the ARS(2,2,2) scheme. The precise mechanism is described in Section~\ref{sec:imex}.
+
+\noindent\textbf{RK4 validator:} For the explicit RK4 stepper (used only for validation at small $\Delta t$), post-step exponential dissipation is retained:
+\begin{equation}
+\hhat{f}^{n+1}(\bm{k},Z_j) = \hhat{f}^*(\bm{k},Z_j)\,\exp\!\big(-\lambda_f(\bm{k})\,\Delta t\big),
+\end{equation}
+where $\hhat{f}^*$ is the RK4 result on the nondissipative terms. The $O(\Delta t)$ splitting error is negligible at the small $\Delta t$ required for RK4 stability.
+
+
+%======================================================================
+\section{Time Integration}
+\label{sec:timestepping}
+%======================================================================
+
+\subsection{State vector}
+
+The full state vector in mixed (horizontal-spectral, vertical-collocation) space is:
+\begin{equation}
+\bm{S} = \Big\{\hhat{q}'(\bm{k}, \xi_j),\; \hhat{w}(\bm{k}, \xi_j),\; \hhat\theta(\bm{k}, \xi_j)\Big\}, \qquad j = 0, \ldots, N_Z.
+\end{equation}
+Total degrees of freedom: $N_x \times (N_x/2+1) \times 3(N_Z + 1)$ complex numbers.
+
+
+\subsection{RK4 validator (explicit reference stepper)}
+
+For validation at small $\Delta t$, the full RHS (explicit + implicit + dissipation) is integrated with classical RK4. Dissipation is applied post-step as an exponential multiplier. This is used only to verify the IMEX scheme (Section~\ref{sec:imex}) at small $\Delta t$ where both methods should agree.
+
+Each time step proceeds as:
+\begin{enumerate}[nosep]
+\item Compute the nondissipative RHS $\bm{R}(\bm{S})$ (Jacobians + linear coupling + $\beta$ term + vertical derivatives via $\Dvec_Z$).
+\item \textbf{Enforce boundary conditions on the RHS:}
+\begin{itemize}[nosep]
+\item Set $R^{(w)}_0 = R^{(w)}_{N_Z} = 0$ and $R^{(\theta)}_0 = R^{(\theta)}_{N_Z} = 0$ (Dirichlet clamping).
+\item Set $R^{(q')}_0$ and $R^{(q')}_{N_Z}$ from the Neumann projection: compute what boundary RHS values are needed so that $\partial_Z q'|_{Z=0,1} = 0$ remains satisfied after the RK sub-step. (Alternatively, use the ``evolve-then-project'' approach.)
+\end{itemize}
+\item Advance with standard RK4:
+\begin{align}
+\bm{k}_1 &= \bm{R}(\bm{S}^n), \notag\\
+\bm{k}_2 &= \bm{R}(\bm{S}^n + \tfrac{\Delta t}{2}\,\bm{k}_1), \notag\\
+\bm{k}_3 &= \bm{R}(\bm{S}^n + \tfrac{\Delta t}{2}\,\bm{k}_2), \notag\\
+\bm{k}_4 &= \bm{R}(\bm{S}^n + \Delta t\,\bm{k}_3), \notag\\
+\bm{S}^* &= \bm{S}^n + \frac{\Delta t}{6}(\bm{k}_1 + 2\bm{k}_2 + 2\bm{k}_3 + \bm{k}_4). \notag
+\end{align}
+\item \textbf{Neumann projection (if using evolve-then-project):} After the full RK4 step, recover $q'_0$ and $q'_{N_Z}$ from the $2\times 2$ solve~\eqref{eq:neumann_2x2} using the updated interior values.
+\item Apply implicit diffusion: $\hhat{f}^{n+1}(\bm{k}, \xi_j) = \hhat{f}^*(\bm{k}, \xi_j)\,\exp(-\nu_{\mathrm{eff}}\,\kh^{2p}\,\Delta t)$.
+\item Enforce $\hhat{f}(\bm{0}, \xi_j) = 0$ for all fields and CGL points (zero mean).
+\item Re-clamp boundary values: $w_0 = w_{N_Z} = \theta_0 = \theta_{N_Z} = 0$.
+\end{enumerate}
+
+% \subsection{CFL condition}
+
+% The advective CFL constraint is:
+% \begin{equation}
+% \Delta t \;\le\; C_{\mathrm{CFL}}\,\frac{\Delta x}{\max|\bm{u}|}, \qquad C_{\mathrm{CFL}} \approx 0.5,
+% \end{equation}
+% where $\Delta x = L/N_x$ and $|\bm{u}| = \sqrt{u^2+v^2}$ with $(u,v) = (-\psi_y, \psi_x)$, evaluated at all $(x,y,Z_j)$ collocation points.
+
+% There is a vertical CFL associated with the $\Dvec_Z$ coupling. The spectral radius of $\Dvec_Z$ scales as $O(N_Z^2)$ (the well-known Chebyshev penalty), so:
+% \begin{equation}
+% \Delta t \lesssim \frac{C}{N_Z^2\,\max|\psi|}.
+% \end{equation}
+% This is more restrictive than the sin/cosine $O(N_Z)$ constraint. However, for moderate $N_Z$ (32--64) this is rarely the binding constraint if $\max|\psi|$ is moderate. If it becomes restrictive, implicit treatment of the vertical coupling terms (IMEX splitting) can be employed (Section~\ref{sec:imex}).
+
+
+%======================================================================
+\section{RHS Evaluation Algorithm}
+\label{sec:algorithm}
+%======================================================================
+
+The complete RHS evaluation for one time level. The key structural difference from the sin/cosine version: no vertical transforms are needed during the nonlinear evaluation.
+
+\subsection{Step 1: Inversion (pointwise in Z)}
+At each CGL point $j = 0, 1, \ldots, N_Z$ and each horizontal wavenumber $\bm{k}$:
+\begin{equation}
+\hhat\psi(\bm{k}, \xi_j) = \frac{-\hhat{q}'(\bm{k}, \xi_j)}{\kh^2 + \Ld^{-2}}.
+\end{equation}
+Handle $\bm{k} = \bm{0}$ by setting $\hhat\psi(\bm{0}, \xi_j) = 0$.
+
+Cost: $O(N_x^2 \cdot N_Z)$ pointwise operations.
+
+\subsection{Step 2: Vertical derivatives via differentiation matrix}
+
+Compute the two required vertical derivatives in spectral space (at each horizontal wavenumber $\bm{k}$):
+\begin{align}
+(\partial_Z w)(\bm{k}, \xi_j) &= \sum_{i=0}^{N_Z} (\Dvec_Z)_{ji}\, \hhat{w}(\bm{k}, \xi_i),\\
+(\partial_Z \psi)(\bm{k}, \xi_j) &= \sum_{i=0}^{N_Z} (\Dvec_Z)_{ji}\, \hhat\psi(\bm{k}, \xi_i).
+\end{align}
+
+\textbf{GPU implementation:} These are batched matrix--vector products. Reshape $\hhat{w}$ as $(N_x \times (N_x/2+1),\; N_Z+1)$ and apply $\Dvec_Z$ via a single \texttt{matmul}:
+\begin{verbatim}
+    dw_dZ = torch.einsum('ij, ...j -> ...i', D_Z, w_hat)
+    dpsi_dZ = torch.einsum('ij, ...j -> ...i', D_Z, psi_hat)
+\end{verbatim}
+
+Cost: Two matrix--vector products of size $(N_Z+1) \times (N_Z+1)$, batched over $N_x \times (N_x/2+1) \approx N_x^2/2$ wavenumbers. Total: $O(N_x^2 \cdot N_Z^2)$. For $N_x = 512$, $N_Z = 32$: $\approx 2 \times 131{,}072 \times 33^2 \approx 3 \times 10^8$ FLOPs, which is fast on GPU ($\sim 0.1$\,ms on H100).
+
+\subsection{Step 3: Horizontal Jacobians at each collocation level}
+
+At each CGL point $\xi_j$ ($j = 0, \ldots, N_Z$), three Jacobians are required:
+\begin{align}
+F^{(q)}_j &= \Jac{\psi(\xi_j)}{q'(\xi_j)}, \\
+F^{(w)}_j &= \Jac{\psi(\xi_j)}{w(\xi_j)}, \\
+F^{(\theta)}_j &= \Jac{\psi(\xi_j)}{\theta(\xi_j)}.
+\end{align}
+Each is evaluated pseudospectrally with 3/2 dealiasing in $(x,y)$: 4 inverse FFTs (derivatives) + 1 forward FFT per Jacobian.
+
+Total: $3 \times (N_Z + 1)$ Jacobians, each requiring 5 FFTs of size $(3N_x/2)^2$.
+
+Cost: This is the dominant cost. At $N_x = 512$, $N_Z = 32$: $\approx 3 \times 33 \times 5 = 495$ FFTs of size $768^2$ per RHS evaluation, $\approx 1980$ per RK4 step.
+
+% \textbf{Note:} Compared to the sin/cosine version (which required $3 \times N_Z^{\text{phys}} \times 5$ FFTs with $N_Z^{\text{phys}} = \lfloor 3N_Z/2 \rfloor = 48$), the Chebyshev version uses fewer FFTs ($33$ vs $48+1$ collocation points) because no vertical dealiasing padding is required.
+
+\subsection{Step 4: Assemble RHS}
+
+At each CGL point $\xi_j$ and horizontal wavenumber $\bm{k}$:
+
+\vspace{0.5em}
+\noindent\textbf{$q'$ RHS:}
+\begin{equation}
+R^{(q)}_j = -\hhat{F}^{(q)}_j - i\beta\,k_x\,\hhat\psi_j + (\Dvec_Z\,\bm{w})_j
+\end{equation}
+
+\noindent\textbf{$w$ RHS:}
+\begin{equation}
+R^{(w)}_j = -\hhat{F}^{(w)}_j - (\Dvec_Z\,\bm{\psi})_j + \frac{\Rav}{\sigma}\,\hhat\theta_j
+\end{equation}
+
+\noindent\textbf{$\theta$ RHS:}
+\begin{equation}
+R^{(\theta)}_j = -\hhat{F}^{(\theta)}_j + \hhat{w}_j \qquad\text{(for $\bar\Theta = 1-Z$)}
+\end{equation}
+
+Then enforce BCs:
+\begin{itemize}[nosep]
+\item $R^{(w)}_0 = R^{(w)}_{N_Z} = 0$ (Dirichlet on $w$).
+\item $R^{(\theta)}_0 = R^{(\theta)}_{N_Z} = 0$ (Dirichlet on $\theta$).
+\item Neumann projection on $q'$ boundary values (or defer to post-step projection).
+\end{itemize}
+
+\subsection{Algorithm summary}
+
+\begin{center}
+\fbox{\parbox{0.92\textwidth}{
+\textbf{RHS}$\big(\hhat{q}'(\bm{k},\xi_j),\; \hhat{w}(\bm{k},\xi_j),\; \hhat\theta(\bm{k},\xi_j)\big)$:
+\begin{enumerate}[nosep,leftmargin=*]
+\item \textbf{Invert:} $\hhat\psi(\bm{k}, \xi_j) = -\hhat{q}'(\bm{k}, \xi_j)/(\kh^2 + \Ld^{-2})$ for all $j$.
+\item \textbf{Vertical derivatives:} $(\Dvec_Z\,\bm{w})$ and $(\Dvec_Z\,\bm{\psi})$ via batched \texttt{matmul} with precomputed $\Dvec_Z$.
+\item \textbf{Horizontal Jacobians:} At each $Z_j$, compute $\Jac{\psi}{q'}$, $\Jac{\psi}{w}$, $\Jac{\psi}{\theta}$ via dealiased pseudospectral method. \emph{(No vertical transforms!)}
+\item \textbf{Assemble:} Add $\beta$ term, vertical derivative terms, and buoyancy forcing.
+\item \textbf{Enforce BCs:} Clamp Dirichlet rows; Neumann-project $q'$ boundaries.
+\end{enumerate}
+}}
+\end{center}
+
+
+%======================================================================
+\section{ARS(2,2,2) IMEX Time Integration with Unified Dissipation}
+\label{sec:imex}
+%======================================================================
+
+The vertical coupling terms ($\Dvec_Z$ acting on $w$ and $q'$) are stiff due to the $O(N_Z^2)$ spectral radius of the Chebyshev differentiation matrix. To avoid the resulting $\Delta t \sim O(N_Z^{-2})$ stability constraint, these terms are treated implicitly. All horizontal dissipation is also folded into the implicit system, preserving second-order accuracy.
+
+\subsection{Explicit--implicit splitting}
+
+Split the RHS into explicit (nonlinear) and implicit (linear) parts:
+\begin{align}
+\pderiv{q'}{t} &= \underbrace{-\Jac{\psi}{q'} - \beta\,\psi_x}_{\displaystyle E_q} + \underbrace{\Dvec_Z\,\bm{w} - \lambda_q\,q'}_{\displaystyle F_q}, \label{eq:split_q}\\
+\pderiv{w}{t} &= \underbrace{-\Jac{\psi}{w} + \frac{\Rav}{\sigma}\,\theta}_{\displaystyle E_w} + \underbrace{c(\bm{k})\,\Dvec_Z\,\bm{q}' - \lambda_w\,w}_{\displaystyle F_w}, \label{eq:split_w}\\
+\pderiv{\theta}{t} &= \underbrace{-\Jac{\psi}{\theta} + (1 - \partial_Z\bar\Theta)\,w}_{\displaystyle E_\theta} + \underbrace{-\lambda_\theta\,\theta}_{\displaystyle F_\theta}, \label{eq:split_th}
+\end{align}
+where $c(\bm{k}) = 1/(\kh^2 + \Ld^{-2})$ and $\lambda_q$, $\lambda_w$, $\lambda_\theta$ are the dissipation rates \eqref{eq:diss_rate_q}--\eqref{eq:diss_rate_th}.
+
+\subsection{ARS(2,2,2) scheme}
+\label{sec:ars222}
+
+The ARS(2,2,2) scheme (Ascher, Ruuth \& Spiteri 1997) is an L-stable, second-order IMEX Runge--Kutta method with two explicit evaluations and two implicit solves. The parameters are:
+\begin{equation}
+\gamma = 1 - \frac{1}{\sqrt{2}} \approx 0.2929, \qquad \delta = -\frac{\sqrt{2}}{2} \approx -0.7071.
+\end{equation}
+
+\noindent\textbf{Stage~1.} Compute explicit tendencies $E_1 = E(y^n)$, then solve for $(q_1, w_1, \theta_1)$:
+\begin{align}
+\alpha_q\,q_1 &= \big(q^n + \gamma\Delta t\,E_1^q\big) + \gamma\Delta t\,\Dvec_Z\,w_1, \label{eq:stage1_q}\\
+\alpha_w\,w_1 &= \big(w^n + \gamma\Delta t\,E_1^w\big) + \gamma\Delta t\,c(\bm{k})\,\Dvec_Z\,q_1, \label{eq:stage1_w}\\
+\alpha_\theta\,\theta_1 &= \theta^n + \gamma\Delta t\,E_1^\theta, \label{eq:stage1_th}
+\end{align}
+where the \emph{alpha factors} absorb the implicit dissipation:
+\begin{equation}
+\boxed{
+\alpha_q(\bm{k}) = 1 + \gamma\Delta t\,\lambda_q(\bm{k}), \qquad
+\alpha_w(\bm{k}) = 1 + \gamma\Delta t\,\lambda_w(\bm{k}), \qquad
+\alpha_\theta(\bm{k}) = 1 + \gamma\Delta t\,\lambda_\theta(\bm{k}).
+}
+\label{eq:alpha_factors}
+\end{equation}
+
+\noindent\textbf{Stage~2.} Compute $E_2 = E(y_1)$ and $F_1 = F(y_1)$, then solve for $(q_2, w_2, \theta_2)$:
+\begin{align}
+R_q &= q^n + \Delta t\big(\delta\,E_1^q + (1-\delta)\,E_2^q\big) + \Delta t(1-\gamma)\,F_1^q, \label{eq:stage2_Rq}\\
+R_w &= w^n + \Delta t\big(\delta\,E_1^w + (1-\delta)\,E_2^w\big) + \Delta t(1-\gamma)\,F_1^w, \\
+R_\theta &= \theta^n + \Delta t\big(\delta\,E_1^\theta + (1-\delta)\,E_2^\theta\big) - \Delta t(1-\gamma)\,\lambda_\theta\,\theta_1, \label{eq:stage2_Rth}
+\end{align}
+where $F_1^q = \Dvec_Z w_1 - \lambda_q\,q_1$ and $F_1^w = c(\bm{k})\Dvec_Z q_1 - \lambda_w\,w_1$.
+Then:
+\begin{align}
+\alpha_q\,q_2 &= R_q + \gamma\Delta t\,\Dvec_Z\,w_2, \\
+\alpha_w\,w_2 &= R_w + \gamma\Delta t\,c(\bm{k})\,\Dvec_Z\,q_2, \\
+\alpha_\theta\,\theta_2 &= R_\theta. \label{eq:stage2_th}
+\end{align}
+The solution $(q^{n+1}, w^{n+1}, \theta^{n+1}) = (q_2, w_2, \theta_2)$.
+
+\subsection{Block elimination for the implicit solve}
+\label{sec:block_elim}
+
+At each stage, the $q$--$w$ system \eqref{eq:stage1_q}--\eqref{eq:stage1_w} (or the Stage~2 equivalent) is solved by block elimination. Substituting $q = (R_q + \gamma\Delta t\,\Dvec_Z\,w)/\alpha_q$ into the $w$ equation gives:
+\begin{equation}
+\boxed{
+A'(\bm{k})\,w = R_w + \gamma\Delta t\,\frac{c(\bm{k})}{\alpha_q}\,\Dvec_Z\,R_q
+}
+\label{eq:w_system}
+\end{equation}
+where the dissipation-modified implicit matrix is:
+\begin{equation}
+\boxed{
+A'(\bm{k}) = \alpha_w\,I - (\gamma\Delta t)^2\,\frac{c(\bm{k})}{\alpha_q}\,\Dvec_Z^{(2)}
+}
+\label{eq:A_prime}
+\end{equation}
+with Dirichlet BCs on $w$ (rows $0$ and $N_Z$ replaced by identity). After solving for $w$, back-substitute:
+\begin{equation}
+q = \frac{R_q + \gamma\Delta t\,\Dvec_Z\,w}{\alpha_q}.
+\label{eq:q_backsub}
+\end{equation}
+
+\noindent\textbf{Key property:} $A'(\bm{k})$ depends on $\bm{k}$ only through $\kh^2$ (since $c$, $\alpha_q$, $\alpha_w$, $\lambda_q$, $\lambda_w$ are all functions of $\kh^2$). This enables $|\bm{k}|^2$ shell deduplication (\S\ref{sec:shells}).
+
+\noindent\textbf{Theta:} The $\theta$ equation decouples and is solved directly: $\theta = R_\theta/\alpha_\theta$ with Dirichlet clamping at the boundaries.
+
+\subsection{Precomputed inverses with shell deduplication}
+\label{sec:shells}
+
+Rather than solving $A'(\bm{k})\,w = \text{rhs}$ at each time step, the matrix inverses $(A')^{-1}$ are precomputed once at initialization for each unique $\kh^2$ shell:
+\begin{equation}
+w = (A')^{-1}\,\text{rhs}, \qquad\text{(batched matmul)}.
+\end{equation}
+At $N_x = 1024$, there are $\sim$1500 unique $\kh^2$ values out of $\sim$500K wavenumber pairs. Storing $(A')^{-1}$ for each shell costs $\sim$12\,MB (vs $\sim$9\,GB without deduplication).
+
+The \texttt{ksq\_idx} array maps each $(k_x, k_y)$ to its shell index, enabling a single gather + batched matmul to solve all wavenumbers simultaneously.
+
+\subsection{Mean temperature implicit solve}
+\label{sec:mean_temp_imex}
+
+The diffusive term $\sigma^{-1}\partial_{ZZ}\bar\Theta$ in \eqref{eq:thetabar} is treated implicitly at each IMEX stage via a 1D solve:
+\begin{equation}
+\left(I - \gamma\Delta t\,\frac{\epsilon^{-2}}{\sigma}\,\Dvec_Z^{(2)}\right)\bar\Theta^{*} = R_{\bar\Theta},
+\end{equation}
+with Dirichlet BCs $\bar\Theta'(0) = \bar\Theta'(1) = 0$. The convective flux divergence $-\epsilon^{-2}\,\partial_Z\avg{w\theta}_{xy}$ is treated explicitly. This is a single tridiagonal-like dense solve of size $(N_Z+1)$, trivially cheap.
+
+
+%======================================================================
+\section{Diagnostic Quantities}
+\label{sec:diagnostics}
+%======================================================================
+
+\subsection{Barotropic--baroclinic decomposition}
+
+The depth-averaged (barotropic) streamfunction is:
+\begin{equation}
+\avg{\psi}(x,y) = \int_0^1 \psi(x,y,Z)\,dZ.
+\end{equation}
+In Chebyshev collocation, this integral is evaluated using Clenshaw--Curtis quadrature weights $\{w^{\mathrm{CC}}_j\}_{j=0}^{N_Z}$:
+\begin{equation}
+\avg{\psi}(\bm{k}) = \sum_{j=0}^{N_Z} w^{\mathrm{CC}}_j\, \hhat\psi(\bm{k}, \xi_j),
+\label{eq:bt_avg}
+\end{equation}
+where the Clenshaw--Curtis weights (in the $Z$ coordinate, absorbing the Jacobian $dZ = d\xi/2$) are:
+\begin{equation}
+w^{\mathrm{CC}}_j = \frac{1}{N_Z}\left(1 - 2\sum_{\substack{m=1 \\ m\;\text{even}}}^{N_Z} \frac{\cos(m\pi j/N_Z)}{m^2 - 1}\right) \times \frac{1}{2}\,c_j^{-1},
+\end{equation}
+with $c_0 = c_{N_Z} = 2$, $c_j = 1$ otherwise. These are precomputed once.
+
+The baroclinic departure is $\psi'(\bm{k}, \xi_j) = \hhat\psi(\bm{k}, \xi_j) - \avg{\psi}(\bm{k})$.
+
+% \textbf{Simpler alternative:} Compute the barotropic mode via Chebyshev coefficient. The depth average is the $n = 0$ Chebyshev coefficient of the Chebyshev expansion:
+% \begin{equation}
+% \avg{\psi}(\bm{k}) = \hat\psi_0^{\mathrm{Cheb}} - \hat\psi_2^{\mathrm{Cheb}}/3 + \hat\psi_4^{\mathrm{Cheb}}/15 - \cdots
+% \end{equation}
+% (using the integral of $T_n$ over $[-1,1]$, which is $2/(1-n^2)$ for even $n$ and $0$ for odd $n$). Equivalently, just apply the CC weights directly.
+
+\subsection{Reynolds stress forcing}
+
+The barotropic vorticity forcing is diagnosed from the depth-averaged Jacobian. At each horizontal wavenumber:
+\begin{equation}
+\mathcal{F}_{\mathrm{RS}}(\bm{k}) = -\sum_{j=0}^{N_Z} w^{\mathrm{CC}}_j\,\hhat{F}^{(q)}_j(\bm{k}).
+\end{equation}
+
+\subsection{Energy spectra}
+
+The barotropic kinetic energy spectrum:
+\begin{equation}
+E_{\mathrm{bt}}(k) = \frac{1}{2}\sum_{\kh \in [k, k+\Delta k)} \kh^2\,|\avg{\hhat\psi}(\bm{k})|^2.
+\end{equation}
+
+The total (depth-integrated) kinetic energy spectrum:
+\begin{equation}
+E_{\mathrm{tot}}(k) = \frac{1}{2}\sum_{\kh \in [k, k+\Delta k)} \kh^2 \sum_{j=0}^{N_Z} w^{\mathrm{CC}}_j\,|\hhat\psi(\bm{k}, \xi_j)|^2.
+\end{equation}
+
+The baroclinic kinetic energy spectrum is $E_{\mathrm{bc}}(k) = E_{\mathrm{tot}}(k) - E_{\mathrm{bt}}(k)$.
+
+Expected spectral signatures:
+\begin{itemize}[nosep]
+\item Rubio et al.\ (2014): barotropic $k^{-3}$, baroclinic $k^{-5/3}$.
+\item Zonostrophic regime: $E_{\mathrm{zonal}}(k_y) \sim k_y^{-5}$ at mid-latitudes.
+\item Polar regime: cascade arrest at $\Ld$, possible vortex crystal formation.
+\end{itemize}
+
+\subsection{Zonal mean flow}
+
+\begin{equation}
+\bar{u}(y) = -\frac{1}{L}\int_0^L \pderiv{\avg{\psi}}{y}\,dx = -\sum_{k_y} ik_y\,\avg{\hhat\psi}(0,k_y)\,e^{ik_y y}.
+\end{equation}
+
+
+%======================================================================
+\section{Memory Layout and GPU Implementation}
+\label{sec:gpu}
+%======================================================================
+
+\subsection{Array shapes}
+
+All fields are stored as complex tensors. The horizontal spectral dimensions use the real FFT convention. The vertical dimension indexes the CGL collocation point.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Tensor & Shape & Basis \\
+\midrule
+\texttt{q\_hat} & $(N_Z+1,\; N_x,\; N_x/2+1)$ & CGL $\times$ rfft2 \\
+\texttt{w\_hat} & $(N_Z+1,\; N_x,\; N_x/2+1)$ & CGL $\times$ rfft2 \\
+\texttt{th\_hat} & $(N_Z+1,\; N_x,\; N_x/2+1)$ & CGL $\times$ rfft2 \\
+\texttt{th\_bar} & $(N_Z+1,)$ & Mean temperature deviation at CGL points \\
+\midrule
+\texttt{D\_Z} & $(N_Z+1,\; N_Z+1)$ & First-derivative matrix \\
+\texttt{D\_Z\_sq} & $(N_Z+1,\; N_Z+1)$ & Second-derivative matrix (coefficient-space, \S\ref{sec:d2_pitfall}) \\
+\texttt{imex\_inv} & $(n_{\mathrm{shells}},\; N_Z+1,\; N_Z+1)$ & Precomputed $(A')^{-1}$ per $\kh^2$ shell \\
+\texttt{ksq\_idx} & $(N_x,\; N_x/2+1)$ & Shell index for each $(k_x, k_y)$ \\
+\midrule
+\texttt{f\_phys} & $(N_x^{\mathrm{pad}},\; N_x^{\mathrm{pad}})$ & Padded physical $(x,y)$ for Jacobians \\
+\bottomrule
+\end{tabular}
+\end{center}
+where $N_x^{\mathrm{pad}} = 3N_x/2$. The $Z$-first layout ensures horizontal FFTs (applied along axes 1--2) batch over axis~0.
+
+
+\subsection{Memory estimate}
+
+Per complex64 tensor of shape $(N_x, N_x/2+1, N_Z+1)$: $N_x \times (N_x/2+1) \times (N_Z+1) \times 8$ bytes.
+
+At $N_x = 512$, $N_Z = 32$: each spectral tensor $\approx 34$\,MB. Total state (3 prognostic + 1 diagnostic): $\approx 136$\,MB. Including RK4 work arrays and padded physical-space arrays: $\approx 3$--$4$\,GB total. Well within 80\,GB H100 capacity.
+
+The differentiation matrix $\Dvec_Z$ and associated precomputed data are $O(N_Z^2)$ floats $\sim$ negligible.
+
+At $N_x = 1024$, $N_Z = 64$: each spectral tensor $\approx 270$\,MB. Total working memory: $\approx 20$--$30$\,GB. Still fits on one H100.
+
+\subsection{Operation ordering for GPU efficiency}
+
+\begin{itemize}[nosep]
+\item \textbf{Horizontal FFTs:} Batched over the $N_Z + 1$ CGL points. \texttt{torch.fft.rfft2} or \texttt{jax.numpy.fft.rfft2} with the vertical dimension as the batch dimension.
+\item \textbf{Vertical derivatives:} Batched dense matrix--vector product via \texttt{einsum} or \texttt{matmul}. The $\Dvec_Z$ matrix is small and fits entirely in shared memory / registers.
+\item \textbf{Jacobians:} At each $Z_j$, the horizontal derivatives and multiplications are independent across $Z$-levels and fully parallelizable. This is the same structure as the sin/cosine version, but without the pre/post vertical transforms.
+\item \textbf{BC enforcement:} Two dot products + $2\times 2$ solve per $\bm{k}$ for the Neumann condition. Fully vectorized across $\bm{k}$.
+\end{itemize}
+
+
+%======================================================================
+\section{Mapping to Jupiter}
+\label{sec:jupiter}
+%======================================================================
+
+\subsection{Jovian parameter estimates}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Quantity & Estimate & Source \\
+\midrule
+Rotation rate $\Omega$ & $1.76 \times 10^{-4}$\,s$^{-1}$ & System III \\
+Weather layer depth $h$ & $\sim 300$\,km & MWR / gravity \\
+Molecular viscosity $\nu$ & $\sim 10^{-2}$\,m$^2$\,s$^{-1}$ & Molecular H$_2$ \\
+Ekman number $\Ek$ & $\sim 10^{-15}$ & \\
+Convective scale $\Lc = \Ek^{1/3}h$ & $\sim 30$\,m & \\
+Planetary radius $R_p$ & $7.15\times 10^7$\,m & \\
+Polar Coriolis $f_p = 2\Omega$ & $3.52\times 10^{-4}$\,s$^{-1}$ & \\
+\midrule
+\multicolumn{3}{l}{\emph{Observed scales (Siegelman et al.\ 2022, Nature Physics):}} \\
+Convective injection scale & $\sim 100$\,km & JIRAM \\
+Circumpolar cyclone diameter & $\sim 5{,}000$\,km & Juno \\
+Spectral break (bt/bc transition) & $\sim 1{,}600$\,km & \\
+\midrule
+\multicolumn{3}{l}{\emph{Constrained from Juno data:}} \\
+Deformation radius $\Ld$ & $\sim 220$\,km (N), $\sim 360$\,km (S) & Gavriel \& Kaspi 2025 \\
+$\beta$ (polar) $= f_p/R_p^2$ & $6.9 \times 10^{-20}$\,m$^{-1}$s$^{-1}$ & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Scale gap and turbulent viscosity}
+
+The molecular convective scale ($\sim 30$\,m) is far smaller than the observed convective injection scale ($\sim 100$\,km). This gap of $\sim 3000\times$ is bridged by the turbulent cascade: what is observed as ``convective injection'' at 100\,km is the top of an upscale energy transfer from the true convective scale. In our model, this means we should \emph{not} attempt to resolve the molecular $\Lc$ but instead work with an effective turbulent viscosity $\nu_{\mathrm{turb}}$ that sets the resolved convective scale to $\sim 100$\,km.
+
+\subsection{Nondimensional parameter mapping}
+
+Working in NHQGE-natural units where $\Lc = 1$, $h = 1$:
+\begin{equation}
+\beta_{\mathrm{nd}} = \beta_{\mathrm{dim}} \times \Lc \times t_{\mathrm{conv}}, \qquad \Ld^{\mathrm{nd}} = \Ld^{\mathrm{dim}}/\Lc.
+\end{equation}
+With an effective $\Lc \sim 100$\,km and $\Ld \sim 300$\,km: $\Ld^{\mathrm{nd}} \sim 3$.
+
+% \subsection{Advantage of Chebyshev for Jovian modeling}
+
+% The CGL point clustering near $Z = 0$ and $Z = 1$ is physically motivated: Jupiter's weather layer likely has thin boundary layers (thermal or compositional) near the top (visible cloud deck) and bottom (transition to deeper interior). The Chebyshev grid naturally resolves these without wasting resolution in the bulk interior.
+
+% Furthermore, if we eventually want to evolve the mean temperature profile $\bar\Theta(Z,t)$ away from the simple conduction state, the Chebyshev framework handles the variable-coefficient term $w\,\partial_Z\bar\Theta$ naturally at collocation points, whereas the sin/cosine approach would require computing the Chebyshev coefficients of $\partial_Z\bar\Theta$ and evaluating a mode-coupling integral.
+
+
+%======================================================================
+\section{Validation Strategy}
+\label{sec:validation}
+%======================================================================
+
+\subsection{Case 0: Linear onset}
+
+At $\beta = 0$, $\Ld = \infty$, $\Rav$ slightly above $\Rav_c$: verify the critical wavenumber $k_c$ and growth rate from the linear stability analysis of the conduction state. The dispersion relation is the same as for the sin/cosine formulation (the linear onset does not depend on the discretization method). The most unstable mode has vertical structure proportional to $\sin(\pi Z)$, which should be well-resolved by $N_Z \ge 8$ CGL points.
+
+Additional Chebyshev-specific check: verify that the eigenvalues of the linearized discrete system (using $\Dvec_Z$) converge to the analytic dispersion relation as $N_Z$ increases. This tests both the differentiation matrix accuracy and the BC enforcement.
+
+\subsection{Case 1: Rubio et al.\ (2014) reproduction}
+
+$\beta = 0$, $\Ld = \infty$, $\Rav = 100$, $\sigma = 1$, domain $20\Lc \times 20\Lc$. Reproduce:
+\begin{itemize}[nosep]
+\item Three temporal regimes (algebraic barotropic growth, $k^{-5/3}$ cascade, $k^{-3}$ condensation).
+\item Domain-filling dipolar vortex at late times.
+\item Dual spectral signature: barotropic $k^{-3}$, baroclinic $k^{-5/3}$.
+\end{itemize}
+
+This is the critical validation: the Chebyshev and sin/cosine codes should produce statistically identical results (same spectra, same condensation time scales) at matched resolution.
+
+\subsection{Case 2: $\beta$-plane, $\Ld = \infty$}
+
+Add $\beta > 0$ with $\Ld = \infty$. Expect transition from isotropic condensation to zonal jet formation at the Rhines scale.
+
+\subsection{Case 3: $\beta = 0$, finite $\Ld$}
+
+Keep $\beta = 0$ but set $\Ld$ finite. Cascade arrest near $\Ld$, producing finite-size vortices.
+
+\subsection{Case 4: Full Jovian parameter regime}
+
+$\beta > 0$, $\Ld$ finite, domain large enough for multiple deformation radii and Rhines scales.
+
+\subsection{Case 5 (Chebyshev-specific): Non-trivial mean profile}
+
+Evolve $\bar\Theta(Z,t)$ via equation~\eqref{eq:thetabar} instead of fixing the conduction profile. This tests the variable-coefficient capability that is natural in Chebyshev collocation. Compare the mean profile evolution and its effect on the convective dynamics against Julien et al.\ results.
+
+
+%======================================================================
+\section{Summary of Equations (Compact Reference)}
+\label{sec:summary}
+%======================================================================
+
+\noindent\fbox{\parbox{0.95\textwidth}{
+\textbf{Prognostic equations} (at each CGL point $Z_j$, in horizontal spectral space):
+\begin{align}
+\pderiv{q'_j}{t} &= \underbrace{-\widehat{\Jac{\psi}{q'}}_j - i\beta\,k_x\,\hhat\psi_j}_{E_q} + \underbrace{(\Dvec_Z\,\bm{w})_j - \lambda_q\,q'_j}_{F_q} \tag{PV}\\[3pt]
+\pderiv{w_j}{t} &= \underbrace{-\widehat{\Jac{\psi}{w}}_j + \frac{\Rav}{\sigma}\,\hhat\theta_j}_{E_w} + \underbrace{c(\bm{k})\,(\Dvec_Z\,\bm{q}')_j - \lambda_w\,w_j}_{F_w} \tag{$w$}\\[3pt]
+\pderiv{\theta_j}{t} &= \underbrace{-\widehat{\Jac{\psi}{\theta}}_j + (1-\partial_Z\bar\Theta)_j\,w_j}_{E_\theta} + \underbrace{-\lambda_\theta\,\theta_j}_{F_\theta} \tag{$\theta$}\\[3pt]
+\epsilon^{-2}\pderiv{\bar\Theta}{t} &= -\partial_Z\avg{w\theta}_{xy} + \sigma^{-1}\,\partial_{ZZ}\bar\Theta \tag{$\bar\Theta$}
+\end{align}
+
+\textbf{Inversion} (pointwise in $Z$): $\;\;\displaystyle\hhat\psi(\bm{k}, Z_j) = \frac{-\hhat{q}'(\bm{k}, Z_j)}{\kh^2 + \Ld^{-2}}$
+
+\textbf{IMEX implicit matrix} (precomputed per $\kh^2$ shell):
+$\;\;\displaystyle A'(\bm{k}) = \alpha_w I - (\gamma\Delta t)^2\,\frac{c(\bm{k})}{\alpha_q}\,\Dvec_Z^{(2)}$
+
+\textbf{Dissipation rates:} $\lambda_q = \nu_q\kh^{2p}+r$, \;$\lambda_w = \nu_w\kh^{2}$, \;$\lambda_\theta = (\nu_\theta/\sigma)\kh^{2}$
+
+\textbf{Alpha factors:} $\alpha_f = 1 + \gamma\Delta t\,\lambda_f$ \;(with $\gamma = 1-1/\sqrt{2}$)
+
+\textbf{Boundary conditions:}
+\begin{itemize}[nosep,leftmargin=*]
+\item $w(Z_0) = w(Z_{N_Z}) = 0$ (Dirichlet, clamp boundary rows)
+\item $\theta(Z_0) = \theta(Z_{N_Z}) = 0$ (Dirichlet, clamp boundary rows)
+\item $\partial_Z q'|_{Z_0} = \partial_Z q'|_{Z_{N_Z}} = 0$ (Neumann, $2\times 2$ projection)
+\item $\bar\Theta(0) = 1$, $\bar\Theta(1) = 0$ (Dirichlet)
+\end{itemize}
+
+\textbf{Vertical grid:} CGL points $\xi_j = \cos(\pi j/N_Z)$, $Z_j = (1+\xi_j)/2$, $j = 0,\ldots,N_Z$.
+
+\textbf{Parameters:} $\Rav$ (supercriticality), $\sigma$ (Prandtl), $\beta$ (PV gradient), $\Ld$ (deformation radius), $L$ (domain), $\nu_q$/$\nu_w$/$\nu_\theta$/$r$ (dissipation), $p$ (hyperviscosity order).
+}}
+
+\end{document}

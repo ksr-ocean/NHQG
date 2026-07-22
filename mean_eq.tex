@@ -1,0 +1,843 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{physics}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\title{Reassessment of the \texttt{evolve\_mean} Branch in the NHQGE Solver:\\
+Mean-Temperature Dynamics, Discrete Exchange, and the Likely Origin of the Coherent Late-Time Runaway}
+\author{}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This note is a self-contained reassessment of the current NHQGE solver pathology, with emphasis on the \texttt{evolve\_mean} branch and the possibility that the remaining failure is best interpreted as a coherent thermal-energy imbalance rather than a generic numerical instability. The assessment is based on the attached project notes and source code. The main conclusions are:
+
+\begin{enumerate}[label=(\roman*)]
+\item the current \texttt{evolve\_mean} behavior is qualitatively different from the rapid \texttt{fixed\_conduction} runaway and should be treated as the more physically informative branch;
+\item there is no obvious one-line algebraic sign error in the mean-temperature equation as currently implemented;
+\item however, the present diagnostics do \emph{not} yet verify that the fluctuation--mean thermal exchange closes as a discrete budget;
+\item the currently logged quantity called \texttt{max|Theta\_bar'|} is not a physical-space maximum of the mean-profile deviation, but the maximum absolute \emph{Chebyshev coefficient}, and is therefore a misleading observable;
+\item the most plausible remaining issue is a subtle discrete exchange leak and/or a numerically weakened mean-feedback loop caused by the present IMEX splitting, rather than vertical aliasing, transform mismatch, or an equivalent nonlinear-form rewrite.
+\end{enumerate}
+
+The note also lists a ranked set of next probes that are significantly more discriminating than the experiments already performed.
+\end{abstract}
+
+\tableofcontents
+
+\section{Purpose and scope}
+
+The purpose of this note is to reassess the current instability picture using the most recent attached files, with the mean-temperature pathway taken as the primary suspect. The reassessment is motivated by the observation that the \texttt{evolve\_mean} branch does \emph{not} look like a garden-variety numerical blowup: it remains coherent, low-shell, and strongly modified relative to \texttt{fixed\_conduction}, even though it still eventually diverges.
+
+This note does \emph{not} attempt to prove the final cause. Instead, it does four things:
+
+\begin{enumerate}
+\item it summarizes what the current experiments already imply;
+\item it audits the actual code path for the mean-temperature equation and its coupling into the fluctuation equations;
+\item it identifies the most important diagnostic and energetic gaps in the current analysis;
+\item it ranks the highest-value next probes.
+\end{enumerate}
+
+\section{Current empirical picture from the attached notes}
+
+\subsection{The main qualitative distinction: \texttt{fixed\_conduction} versus \texttt{evolve\_mean}}
+
+The most important empirical fact in the attached investigation log is that the fresh matched runs with identical numerics, initial data, and geometry, differing only in
+\[
+\texttt{thermal\_closure} \in \{\texttt{fixed\_conduction},\ \texttt{evolve\_mean}\},
+\]
+show a dramatic divergence after the linear phase.
+
+The matched diagnostic table in the notes is:
+
+\begin{center}
+\begin{tabular}{@{}cccccc@{}}
+\toprule
+time & fixed $Nu$ & evolve $Nu$ & fixed max$v$ & evolve max$v$ & evolve max$|\Theta_{\mathrm{bar}}'|$ \\
+\midrule
+2.00 & $1.0000$ & $1.0000$ & $7.0\times 10^{-4}$ & $7.0\times 10^{-4}$ & $0.0000$ \\
+2.50 & $1.0001$ & $1.0001$ & $4.26\times 10^{-2}$ & $4.26\times 10^{-2}$ & $0.0000$ \\
+3.00 & $1.2917$ & $1.2761$ & $2.839$ & $2.862$ & $0.0194$ \\
+3.50 & $1351.9$ & $40.056$ & $196.5$ & $193.4$ & $0.2737$ \\
+4.00 & $1.4365\times 10^{5}$ & $126.93$ & $535.4$ & $557.8$ & $0.2692$ \\
+4.50 & $7.0426\times 10^{8}$ & $674.63$ & $486.5$ & $363.7$ & $0.2233$ \\
+5.00 & $3.5010\times 10^{12}$ & $5.8330\times 10^{4}$ & $543.6$ & $239.2$ & $0.2360$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The correct reading of this table is:
+
+\begin{itemize}
+\item through the linear phase, the two branches essentially track one another;
+\item once nonlinear effects become important, \texttt{evolve\_mean} strongly suppresses the runaway relative to \texttt{fixed\_conduction};
+\item this suppression is very large: roughly three orders of magnitude in $Nu$ at $t=4$, and much larger later;
+\item despite this, \texttt{evolve\_mean} still does not saturate cleanly by $t=5$ or $t=8$ in the newer budget runs.
+\end{itemize}
+
+This is the first reason the mean-temperature sector is the right place to probe. If the pathology were simply a broad numerical instability, one would expect less coherent behavior and much less sensitivity to the mean thermal closure.
+
+\subsection{What the newer shell budgets imply}
+
+The attached notes report that the more recent shellwise budgets show:
+
+\begin{itemize}
+\item the dominant shell at late time remains low:
+\[
+k \approx 0.9786;
+\]
+\item nonlinear transfer in KE, $w$, and $\theta$ remains comparatively modest and conservative;
+\item the runaway is not being driven by a broadband forward cascade;
+\item the dominant source chain visible in the present diagnostics is
+\[
+\theta\text{ conduction} \;\longrightarrow\; \text{buoyancy into } w \;\longrightarrow\; q\text{-}w\text{ coupling into KE}.
+\]
+\end{itemize}
+
+This already weakens the older ``spectral cascade / dealiasing'' interpretation substantially. The coherent late-time divergence in the \texttt{evolve\_mean} branch looks more like a structurally wrong source/sink balance in a low-mode pathway than a catastrophic pileup into unresolved modes.
+
+\subsection{Why earlier negative tests matter}
+
+Several significant tests in the notes are already close to negative:
+
+\begin{enumerate}
+\item vertical overresolution / dealiasing in $z$;
+\item matching Coral-style $NZAA = 3NZ/2$;
+\item switching from a Lobatto overresolved transform to a Gauss/DCT work transform;
+\item rewriting the nonlinear advection from Jacobian form to conservative flux form;
+\item increasing vertical resolution further, e.g. $64\times 64 \times 256$.
+\end{enumerate}
+
+All of these change details, but none removes the coherent late-time divergence in \texttt{evolve\_mean}. This does \emph{not} prove that every transform-level issue is irrelevant, but it does strongly shift the burden of proof toward a subtler exchange or splitting issue.
+
+\section{The actual implemented mean-temperature pathway}
+
+\subsection{State representation and variable conventions}
+
+The relevant state is
+\[
+\texttt{State}(q\_hat,\ w\_hat,\ th\_hat,\ th\_bar).
+\]
+
+The conventions are:
+
+\begin{itemize}
+\item $q'$ is stored in Chebyshev coefficients;
+\item $w$ and $\theta$ are stored in a reduced Dirichlet Galerkin basis;
+\item $\Theta_{\mathrm{bar}}'$ (called \texttt{th\_bar}) is stored in \emph{Chebyshev coefficients}.
+\end{itemize}
+
+The total mean temperature in physical space is reconstructed in the I/O layer as
+\[
+\Theta_{\mathrm{tot}}(Z)
+=
+1 - Z + \Theta_{\mathrm{bar}}'(Z),
+\]
+with
+\[
+\Theta_{\mathrm{bar}}'(Z)
+=
+V\, \texttt{th\_bar}.
+\]
+
+This convention is important because the fluctuation equation couples to the \emph{gradient}
+\[
+\partial_Z \Theta_{\mathrm{tot}} = -1 + \partial_Z \Theta_{\mathrm{bar}}',
+\]
+and therefore the source term in the fluctuation temperature equation is controlled by
+\[
+1 - \partial_Z \Theta_{\mathrm{bar}}'(Z).
+\]
+
+\subsection{Explicit fluctuation-side mean feedback}
+
+In the explicit RHS, the code does the following when
+\[
+\texttt{thermal\_closure} = \texttt{evolve\_mean}:
+\]
+
+\begin{enumerate}
+\item compute
+\[
+\partial_Z \Theta_{\mathrm{bar}}'
+\quad \text{in coefficient space via } G_Z;
+\]
+\item evaluate it at nodes;
+\item multiply by nodal $w$;
+\item transform that product back to coefficients;
+\item add it to the $\theta$ equation as
+\[
+E_\theta = -A[\psi,\theta] - w\,\partial_Z\Theta_{\mathrm{bar}}'
+\]
+after the appropriate projection.
+\end{enumerate}
+
+Schematically, the fluctuation temperature equation being implemented is therefore
+\[
+\partial_t \theta
+=
+-A[\psi,\theta]
+-w\,\partial_Z\Theta_{\mathrm{bar}}'
++\text{(implicit terms)}.
+\]
+
+\subsection{Implicit conduction source for $\theta$}
+
+In the implicit tendency, the code sets
+\[
+I_\theta = w.
+\]
+
+This means that the total $\theta$ equation is effectively split as
+\[
+\partial_t\theta
+=
+-A[\psi,\theta]
+-w\,\partial_Z\Theta_{\mathrm{bar}}'
++w
++\text{diffusion}.
+\]
+
+Equivalently,
+\[
+\partial_t\theta
+=
+-A[\psi,\theta]
++w\bigl(1-\partial_Z\Theta_{\mathrm{bar}}'\bigr)
++\text{diffusion}.
+\]
+
+This is exactly the natural deviation-form decomposition if the total mean profile is
+\[
+\Theta_{\mathrm{tot}} = 1-Z+\Theta_{\mathrm{bar}}'.
+\]
+
+\subsection{Mean-temperature equation as implemented}
+
+The explicit mean-temperature tendency is
+\[
+E_{\Theta_{\mathrm{bar}}'}
+=
+-\epsilon^2\,\partial_Z\langle w\theta\rangle_{xy}.
+\]
+
+The implicit mean-temperature tendency is
+\[
+I_{\Theta_{\mathrm{bar}}'}
+=
+\frac{\epsilon^2}{\sigma}\,\partial_{ZZ}\Theta_{\mathrm{bar}}'.
+\]
+
+Thus the prognostic mean equation being advanced is
+\[
+\partial_t \Theta_{\mathrm{bar}}'
+=
+-\epsilon^2 \partial_Z\langle w\theta\rangle_{xy}
++
+\frac{\epsilon^2}{\sigma}\partial_{ZZ}\Theta_{\mathrm{bar}}'.
+\]
+
+Equivalently,
+\[
+\frac{1}{\epsilon^2}\,\partial_t \Theta_{\mathrm{bar}}'
++
+\partial_Z\langle w\theta\rangle_{xy}
+=
+\frac{1}{\sigma}\partial_{ZZ}\Theta_{\mathrm{bar}}'.
+\]
+
+That is the expected slow-time form of the mean-temperature equation.
+
+\subsection{Interim conclusion from the algebraic audit}
+
+There is no obvious gross sign error in the implemented deviation-form thermal system.
+
+The fluctuation-side source is
+\[
+w\bigl(1-\partial_Z\Theta_{\mathrm{bar}}'\bigr),
+\]
+split into
+
+\begin{itemize}
+\item an implicit conduction contribution $+w$,
+\item an explicit mean-gradient correction $-w\,\partial_Z\Theta_{\mathrm{bar}}'$,
+\end{itemize}
+
+and the mean equation is
+\[
+\frac{1}{\epsilon^2}\partial_t\Theta_{\mathrm{bar}}'
++
+\partial_Z\langle w\theta\rangle_{xy}
+=
+\frac{1}{\sigma}\partial_{ZZ}\Theta_{\mathrm{bar}}'.
+\]
+
+At the level of signs and variable definition, this is internally consistent.
+
+\section{The first concrete problem: the current mean diagnostic is misleading}
+
+\subsection{What is currently logged}
+
+The diagnostics code defines
+\[
+\texttt{th\_bar\_max}
+=
+\max |\texttt{state.th\_bar}|.
+\]
+
+But \texttt{state.th\_bar} is not a nodal profile. It is the vector of \emph{Chebyshev coefficients} of the mean-profile deviation.
+
+Therefore the quantity repeatedly reported in the logs and notes as
+\[
+\max|\Theta_{\mathrm{bar}}'|
+\]
+is not actually
+\[
+\max_Z |\Theta_{\mathrm{bar}}'(Z)|.
+\]
+
+It is instead
+\[
+\max_n |a_n|,
+\qquad
+\Theta_{\mathrm{bar}}'(Z)
+=
+\sum_{n=0}^{N_z} a_n T_n(\xi(Z)).
+\]
+
+\subsection{Why this matters physically}
+
+The physically relevant stabilizing quantity is not even
+\[
+\max_Z |\Theta_{\mathrm{bar}}'(Z)|,
+\]
+but rather the modified gradient entering the fluctuation equation:
+\[
+g(Z)
+=
+1-\partial_Z\Theta_{\mathrm{bar}}'(Z).
+\]
+
+This quantity determines whether the background conductive source has been
+
+\begin{itemize}
+\item barely modified,
+\item substantially flattened,
+\item over-corrected in some interior region.
+\end{itemize}
+
+Therefore the currently highlighted quantity called \texttt{max|Theta\_bar'|} is misleading in two distinct senses:
+
+\begin{enumerate}
+\item it is not a physical-space profile amplitude;
+\item even a correct physical-space amplitude would still not be the most relevant quantity for interpreting the stabilization loop.
+\end{enumerate}
+
+\subsection{What should be recorded instead}
+
+At minimum, the following should replace the current headline mean-profile diagnostic:
+
+\begin{align*}
+\Theta_{\max}^{\mathrm{phys}}
+&=
+\max_Z |\Theta_{\mathrm{bar}}'(Z)|, \\
+G_{\max}
+&=
+\max_Z |\partial_Z \Theta_{\mathrm{bar}}'(Z)|, \\
+g_{\min}
+&=
+\min_Z \left(1-\partial_Z\Theta_{\mathrm{bar}}'(Z)\right), \\
+g_{\max}
+&=
+\max_Z \left(1-\partial_Z\Theta_{\mathrm{bar}}'(Z)\right), \\
+g_{\mathrm{mid}}
+&=
+1-\partial_Z\Theta_{\mathrm{bar}}'(Z=1/2),
+\end{align*}
+or, better, interior averages excluding the CGL endpoint clustering if desired.
+
+\section{The central unresolved issue: the fluctuation--mean thermal exchange is not yet closed diagnostically}
+
+\subsection{Why the current shell budgets are not enough}
+
+The current budgets record:
+
+\begin{itemize}
+\item KE shell tendencies;
+\item $w$-variance shell tendencies;
+\item $\theta$-variance shell tendencies.
+\end{itemize}
+
+In particular, the $\theta$ budget contains terms labeled roughly as
+
+\begin{itemize}
+\item nonlinear transfer,
+\item mean feedback,
+\item conduction source,
+\item dissipation.
+\end{itemize}
+
+This is already useful, and it is what enabled the identification of the chain
+\[
+\theta\text{ conduction} \to w\text{ buoyancy} \to q\text{-}w\text{ stretching} \to \mathrm{KE}.
+\]
+
+However, there is no corresponding budget for the \emph{mean-temperature reservoir itself}. Therefore there is no direct test of whether the coded pair
+\[
+-w\,\partial_Z\Theta_{\mathrm{bar}}'
+\qquad\text{and}\qquad
+-\partial_Z\langle w\theta\rangle_{xy}
+\]
+forms a closed exchange channel in the discrete system.
+
+\subsection{The continuum thermal-exchange identity}
+
+In the continuum, the mean-fluctuation exchange should appear as an internal transfer between
+
+\begin{itemize}
+\item fluctuation thermal variance,
+\[
+E_\theta = \frac12 \langle \theta^2 \rangle,
+\]
+\item mean-profile energy,
+\[
+E_{\bar T}
+=
+\frac{1}{2\epsilon^2}\int_0^1 \bigl(\Theta_{\mathrm{bar}}'(Z)\bigr)^2\,dZ.
+\]
+\end{itemize}
+
+Ignoring diffusion and other source terms for the moment, one expects the exchange pair to satisfy an identity of the form
+\[
+\dv{t} E_\theta^{(\mathrm{mean})}
++
+\dv{t} E_{\bar T}^{(\mathrm{flux})}
+\approx 0.
+\]
+
+More explicitly, the fluctuation-side exchange contribution is
+\[
+\mathcal{T}_{\theta \leftarrow \bar T}
+=
+\langle \theta,\,-w\,\partial_Z\Theta_{\mathrm{bar}}' \rangle,
+\]
+while the mean-side counterpart is
+\[
+\mathcal{T}_{\bar T \leftarrow \theta}
+=
+\frac{1}{\epsilon^2}
+\left\langle
+\Theta_{\mathrm{bar}}',
+-\partial_Z\langle w\theta\rangle_{xy}
+\right\rangle_Z.
+\]
+
+A discrete implementation that respects the exchange structure should make
+\[
+R_{\mathrm{exch}}
+=
+\mathcal{T}_{\theta \leftarrow \bar T}
++
+\mathcal{T}_{\bar T \leftarrow \theta}
+\]
+small.
+
+\subsection{Why a leak is plausible in the current implementation}
+
+The two sides of the exchange are computed by numerically different pathways.
+
+\paragraph{Fluctuation-side pathway.}
+The term
+\[
+-w\,\partial_Z\Theta_{\mathrm{bar}}'
+\]
+is formed by
+
+\begin{enumerate}
+\item differentiating \texttt{th\_bar} in coefficient space via $G_Z$;
+\item evaluating that derivative at nodal points;
+\item multiplying by nodal $w$;
+\item transforming back to Chebyshev coefficients;
+\item projecting into the Dirichlet Galerkin basis for $\theta$.
+\end{enumerate}
+
+\paragraph{Mean-side pathway.}
+The term
+\[
+-\partial_Z\langle w\theta\rangle_{xy}
+\]
+is formed by
+
+\begin{enumerate}
+\item converting $w$ and $\theta$ to nodal form;
+\item transforming each level to physical space;
+\item multiplying in physical space;
+\item horizontally averaging;
+\item transforming the resulting 1D profile back to coefficients;
+\item differentiating with $G_Z$.
+\end{enumerate}
+
+Both pathways are individually reasonable. But they are not manifestly a discrete adjoint pair, and therefore an exchange leak is entirely plausible.
+
+This is especially credible in light of the observed phenomenology:
+
+\begin{itemize}
+\item the divergence remains coherent and low-shell;
+\item the mean feedback is clearly active and stabilizing;
+\item but it appears too weak to close the loop permanently.
+\end{itemize}
+
+That is exactly what one might see if the sign structure were correct but the negative feedback were being weakened by a small but dynamically important discrete mismatch.
+
+\subsection{The missing budget to add immediately}
+
+The single most important missing diagnostic is therefore the \emph{mean-reservoir budget} and the corresponding exchange residual
+\[
+R_{\mathrm{exch}}
+=
+\langle \theta,\,-w\,\partial_Z\Theta_{\mathrm{bar}}' \rangle
++
+\frac{1}{\epsilon^2}
+\left\langle
+\Theta_{\mathrm{bar}}',
+-\partial_Z\langle w\theta\rangle_{xy}
+\right\rangle_Z.
+\]
+
+If this residual is small, then the mean-feedback implementation is probably not leaking energy in the obvious way.
+
+If it is systematically positive or large near the onset of the coherent runaway, that is close to a smoking gun.
+
+\section{A second concrete issue: diagnostic and solver use different heat-flux constructions}
+
+\subsection{What the solver uses}
+
+The solver-side mean equation uses
+\[
+\texttt{horizontal\_mean\_wtheta}(w,\theta,\ldots,Npad),
+\]
+i.e. the dealiased $3/2$ padded horizontal product before averaging.
+
+This was introduced after an alias-sensitive regression showed that the undealiased path could be wrong at $O(1)$ for the mean heat flux.
+
+\subsection{What the scalar diagnostics use}
+
+The diagnostic routine still computes quantities such as
+\[
+Nu = 1 + \langle w\theta\rangle
+\]
+and
+\[
+\texttt{vol\_avg\_tw}
+\]
+using the basic nodal fields
+\[
+w_{\mathrm{nodal}},\qquad \theta_{\mathrm{nodal}},
+\]
+without routing that scalar observable through the same dealiased mean-flux path used by the actual mean equation.
+
+\subsection{Implication}
+
+This means the printed or archived scalar heat-flux diagnostic is not necessarily the exact flux the mean equation is seeing.
+
+This mismatch probably does \emph{not} create the runaway by itself. But it does blur the interpretation of how large the actual mean-profile forcing is and how strong the stabilizing loop really is. In a problem where the mean-feedback loop is the main suspect, this mismatch should be removed.
+
+\section{A third concern: the IMEX split may weaken the stabilizing loop}
+
+\subsection{Current asymmetric splitting}
+
+The current thermal coupling is split as follows:
+
+\begin{itemize}
+\item destabilizing conductive source for $\theta$:
+\[
++w,
+\]
+treated implicitly through
+\[
+I_\theta = w;
+\]
+\item mean-gradient correction:
+\[
+-w\,\partial_Z\Theta_{\mathrm{bar}}',
+\]
+treated explicitly;
+\item mean-flux divergence:
+\[
+-\epsilon^2 \partial_Z \langle w\theta\rangle_{xy},
+\]
+treated explicitly;
+\item mean diffusion:
+\[
+(\epsilon^2/\sigma)\partial_{ZZ}\Theta_{\mathrm{bar}}',
+\]
+treated implicitly.
+\end{itemize}
+
+\subsection{Physical interpretation}
+
+The positive loop
+\[
+w \to \theta \to \text{buoyancy} \to w
+\]
+is therefore treated more tightly than the negative loop
+\[
+w\theta \to \Theta_{\mathrm{bar}}' \to \partial_Z\Theta_{\mathrm{bar}}' \to \theta.
+\]
+
+This is not automatically wrong. But when the mean feedback is already the marginal mechanism trying to stabilize the system, an asymmetric split like this can weaken the negative feedback sufficiently to generate a coherent drift.
+
+\subsection{Why this matches the observed behavior}
+
+This interpretation is consistent with the empirical picture:
+
+\begin{itemize}
+\item the mean feedback is definitely not absent;
+\item it strongly suppresses the fixed-conduction runaway;
+\item but it still looks too weak or too delayed to close the loop permanently.
+\end{itemize}
+
+That is precisely the kind of outcome one might expect if the equations are formally right but the numerical split biases the coupled fast/slow system in favor of the positive loop.
+
+\section{What I do \emph{not} currently think is the leading explanation}
+
+\subsection{Not a gross sign error in the mean-temperature equation}
+
+The code-level audit does \emph{not} reveal an obvious sign flip in the implemented thermal system.
+
+\subsection{Not primarily vertical aliasing}
+
+This was a plausible earlier hypothesis, but the recent tests have weakened it substantially:
+
+\begin{itemize}
+\item vertical overresolution in the explicit path did not cure the problem;
+\item matching Coral-style $NZAA=3NZ/2$ did not cure the problem;
+\item replacing the work transform by a Gauss/DCT path did not cure the problem;
+\item the coherent late-time divergence remains low-shell and does not look like a highest-mode pileup.
+\end{itemize}
+
+\subsection{Not primarily Jacobian-versus-flux-form algebra}
+
+The conservative flux-form rewrite of the nonlinear advection changed very little, as expected for an incompressible pseudospectral method. That negative result is useful because it rules out one class of almost-equivalent algebraic rewrites.
+
+\subsection{Not primarily a trivial timestep issue}
+
+The notes indicate that reducing the timestep substantially did not move the onset region in a meaningful way for the matched control runs. That weakens a simple explicit-CFL explanation.
+
+\section{A subtle but important semantic issue: \texttt{mean\_temp\_eps\_sq}}
+
+The code implements
+\[
+\partial_t \Theta_{\mathrm{bar}}'
+=
+\epsilon^2 \left(
+-\partial_Z\langle w\theta\rangle_{xy}
++
+\frac{1}{\sigma}\partial_{ZZ}\Theta_{\mathrm{bar}}'
+\right),
+\]
+which is equivalent to
+\[
+\frac{1}{\epsilon^2}\partial_t \Theta_{\mathrm{bar}}'
++
+\partial_Z\langle w\theta\rangle_{xy}
+=
+\frac{1}{\sigma}\partial_{ZZ}\Theta_{\mathrm{bar}}'.
+\]
+
+This is internally consistent.
+
+However, one must be careful if later trying to compare against an ``effective $\alpha$'' formulation from the literature, where the modified slow-time coefficient is written on the \emph{left-hand side}:
+\[
+\alpha\,\partial_t \Theta + \partial_Z \langle w\theta\rangle = \sigma^{-1}\partial_{ZZ}\Theta.
+\]
+
+Changing $\alpha$ on the left-hand side is not the same numerical experiment as changing a multiplicative coefficient on the right-hand side unless the mapping is made explicit. With the current default
+\[
+\texttt{mean\_temp\_eps\_sq}=1,
+\]
+this is not the current failure mode. But it is a conceptual trap for future sweeps and should be documented clearly.
+
+\section{Ranked conclusions}
+
+I would currently rank the interpretations as follows.
+
+\subsection*{Most likely}
+The \texttt{evolve\_mean} branch is suffering from a subtle but dynamically important \emph{discrete thermal-exchange mismatch}, not a gross equation error. The fluctuation-side term
+\[
+-w\,\partial_Z\Theta_{\mathrm{bar}}'
+\]
+and the mean-side term
+\[
+-\partial_Z\langle w\theta\rangle_{xy}
+\]
+are not yet being checked as a closed exchange pair.
+
+\subsection*{Also likely}
+The present IMEX split weakens the stabilizing mean-feedback loop relative to the destabilizing conductive source loop. This can produce exactly the observed phenomenology: coherent low-shell growth that is substantially suppressed by mean evolution but not fully saturated.
+
+\subsection*{Definitely true}
+The currently highlighted quantity \texttt{max|Theta\_bar'|} is a misleading diagnostic, because it is the maximum absolute Chebyshev coefficient of \texttt{th\_bar}, not the physical-space maximum of the mean-profile deviation and not the physically relevant modified gradient.
+
+\subsection*{Less likely}
+A gross sign error in the mean-temperature equation itself.
+
+\subsection*{Much less likely now}
+Primary control by vertical aliasing, work-grid transform mismatch, or equivalent nonlinear-form algebra, since those experiments were substantially negative and the resulting divergence remains coherent and low-shell.
+
+\section{Highest-value next probes}
+
+The following tests are ranked in order of expected diagnostic value.
+
+\subsection{Probe 1: replace the misleading mean-profile diagnostic}
+
+Immediately replace
+\[
+\texttt{th\_bar\_max}
+=
+\max |\texttt{state.th\_bar}|
+\]
+with actual physical and gradient-based diagnostics:
+
+\begin{align*}
+\Theta_{\max}^{\mathrm{phys}}
+&=
+\max_Z |\Theta_{\mathrm{bar}}'(Z)|, \\
+G_{\max}
+&=
+\max_Z |\partial_Z\Theta_{\mathrm{bar}}'(Z)|, \\
+g_{\min}
+&=
+\min_Z \left(1-\partial_Z\Theta_{\mathrm{bar}}'(Z)\right), \\
+g_{\max}
+&=
+\max_Z \left(1-\partial_Z\Theta_{\mathrm{bar}}'(Z)\right), \\
+g_{\mathrm{mid}}
+&=
+1-\partial_Z\Theta_{\mathrm{bar}}'(1/2).
+\end{align*}
+
+If the mean feedback is actually strong in gradient space but was simply obscured by the coefficient-based diagnostic, this will reveal it immediately.
+
+\subsection{Probe 2: add a true mean-reservoir budget and exchange residual}
+
+Add
+\[
+E_{\bar T}
+=
+\frac{1}{2\epsilon^2}\int_0^1 \bigl(\Theta_{\mathrm{bar}}'(Z)\bigr)^2\,dZ
+\]
+and record its budget terms.
+
+Most importantly, compute and archive the exchange residual
+\[
+R_{\mathrm{exch}}
+=
+\langle \theta,\,-w\,\partial_Z\Theta_{\mathrm{bar}}' \rangle
++
+\frac{1}{\epsilon^2}
+\left\langle
+\Theta_{\mathrm{bar}}',
+-\partial_Z\langle w\theta\rangle_{xy}
+\right\rangle_Z.
+\]
+
+This is the single best discriminator between
+\begin{itemize}
+\item a correctly implemented but too-weak physical feedback, and
+\item a numerically leaky exchange channel.
+\end{itemize}
+
+\subsection{Probe 3: make the scalar heat-flux diagnostic use the same dealiased path as the mean equation}
+
+Record two scalar flux observables:
+
+\begin{align*}
+Nu_{\mathrm{diag,raw}} &= 1 + \langle w\theta\rangle_{\text{raw nodal path}}, \\
+Nu_{\mathrm{diag,dealiased}} &= 1 + \langle w\theta\rangle_{\text{same path used by mean equation}}.
+\end{align*}
+
+This removes a significant interpretive ambiguity from the current output.
+
+\subsection{Probe 4: diagnostic mean solve instead of prognostic mean evolution}
+
+Run a controlled experiment in which the mean profile is obtained diagnostically from
+\[
+\partial_Z\langle w\theta\rangle_{xy}
+=
+\frac{1}{\sigma}\partial_{ZZ}\Theta_{\mathrm{bar}}',
+\qquad
+\Theta_{\mathrm{bar}}'(0)=\Theta_{\mathrm{bar}}'(1)=0,
+\]
+instead of advancing
+\[
+\partial_t\Theta_{\mathrm{bar}}'.
+\]
+
+This is a very informative probe:
+
+\begin{itemize}
+\item if the diagnostic solve greatly improves saturation, then the mean flux pathway itself may be basically correct, while the current slow-time evolution or splitting is the real issue;
+\item if the pathology remains almost unchanged, then the issue lies deeper in the thermal exchange or flux construction.
+\end{itemize}
+
+\subsection{Probe 5: treat the mean-feedback loop more tightly in time}
+
+If Probe 4 is suggestive, the next step is not arbitrary parameter tuning but a tighter treatment of the stabilizing loop, for example:
+
+\begin{itemize}
+\item stagewise or semi-implicit use of the mean flux in the mean update;
+\item more implicit handling of the mean-gradient correction in the $\theta$ equation;
+\item a predictor-corrector for $\Theta_{\mathrm{bar}}'$ and $\partial_Z\Theta_{\mathrm{bar}}'$ within each IMEX step.
+\end{itemize}
+
+\section{Practical interpretation for ongoing Codex work}
+
+If handing this to a coding agent, the most important message is:
+
+\begin{quote}
+Do \emph{not} spend the next tranche of time on yet another transform-level or generic dealiasing variant until the mean-sector diagnostics are fixed. The current state of evidence favors a coherent thermal-exchange imbalance, not a generic high-mode numerical instability.
+\end{quote}
+
+In concrete terms, the highest-priority implementation tasks are:
+
+\begin{enumerate}
+\item correct the mean-profile diagnostics so they are computed in physical space and gradient space;
+\item add a mean-reservoir budget;
+\item add the fluctuation--mean exchange residual;
+\item make the scalar heat-flux diagnostics follow the same dealiased path used in the actual mean equation;
+\item then run one diagnostic-mean experiment.
+\end{enumerate}
+
+\section{Bottom line}
+
+The present \texttt{evolve\_mean} branch should be treated as the main scientific object of interest, not as a mere delayed version of the \texttt{fixed\_conduction} runaway.
+
+My current best assessment is:
+
+\begin{enumerate}
+\item the mean equation is probably not wrong in a gross algebraic sense;
+\item the current diagnostics are insufficient to judge whether the thermal exchange closes discretely;
+\item the quantity currently interpreted as a mean-profile amplitude is not what it appears to be;
+\item the most plausible remaining mechanism is a subtle discrete exchange leak and/or a numerically weakened stabilizing loop caused by the present splitting.
+\end{enumerate}
+
+Therefore the next decisive step is not more generic anti-aliasing or nonlinear-form experimentation, but a direct audit of the fluctuation--mean exchange budget.
+
+\end{document}

@@ -1,0 +1,260 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\Dt}{\Delta t}
+\newcommand{\lapS}{\nabla_{\mathbb{S}}^{2}}
+\newcommand{\jacS}{J_{\mathbb{S}}}
+\newcommand{\Ylm}{Y_{\ell m}}
+\newcommand{\chiM}{\chi}
+\newcommand{\sponge}{\sigma_{\mathrm{sp}}}
+
+\title{Two-Layer QG Feasibility Model on the Sphere via Dinosaur}
+\author{NHQG / Dinosaur spike}
+\date{2026-05-22}
+
+\begin{document}
+\maketitle
+
+\section{Purpose}
+
+This document defines the equations and numerical method for the first
+Dinosaur/NeuralGCM feasibility spike.  The goal is not yet the full
+nonhydrostatic QG equation.  The goal is to test whether Dinosaur's
+global spherical-harmonic transforms, differential operators, and sharding
+machinery can support a custom QG-like model with broad high-latitude and
+midlatitude dynamics.
+
+The first dynamical test is a two-layer Phillips-style QG model.  This is
+more informative than barotropic vorticity because it includes baroclinic
+coupling and deformation-radius physics, the part of QG that becomes most
+delicate when a formally high-latitude/asymptotic model is embedded on the
+full sphere.
+
+\section{Geometry and representation}
+
+We work on the unit sphere unless stated otherwise.  Latitude is
+$\varphi \in [-\pi/2,\pi/2]$, longitude is $\lambda$, and the spherical
+area element is
+\begin{equation}
+  \dd A = \cos\varphi\,\dd\varphi\,\dd\lambda.
+\end{equation}
+The Coriolis parameter is
+\begin{equation}
+  f(\varphi) = 2\Omega\sin\varphi.
+\end{equation}
+
+Fields are represented globally in spherical harmonics:
+\begin{equation}
+  a(\lambda,\varphi,t)
+  = \sum_{\ell=0}^{L_{\max}}\sum_{m=-\ell}^{\ell}
+  \widehat{a}_{\ell m}(t)\,\Ylm(\lambda,\varphi),
+\end{equation}
+with the exact coefficient layout and normalization inherited from
+Dinosaur.  The spike must record that convention in code reviews once the
+API is inspected.
+
+The spherical Laplacian satisfies
+\begin{equation}
+  \lapS \Ylm = -\ell(\ell+1)\Ylm
+\end{equation}
+on the unit sphere.  If Dinosaur uses dimensional radius $a$, replace
+$\ell(\ell+1)$ by $\ell(\ell+1)/a^{2}$.
+
+\section{Two-layer QG variables}
+
+The prognostic variables are layer potential-vorticity anomalies
+$q_1'(\lambda,\varphi,t)$ and $q_2'(\lambda,\varphi,t)$.
+Layer streamfunctions are $\psi_1$ and $\psi_2$.
+
+The inversion from streamfunction to PV anomaly is
+\begin{align}
+  q_1' &= \lapS \psi_1 + F_1(\psi_2-\psi_1),\\
+  q_2' &= \lapS \psi_2 + F_2(\psi_1-\psi_2).
+  \label{eq:qg-inversion}
+\end{align}
+For the first implementation, $F_1,F_2$ are constants chosen to represent
+the target high-latitude/midlatitude deformation scale.  This makes the
+inversion block diagonal in spherical harmonic degree $\ell$.
+
+For equatorial-regularization tests we also allow latitude-dependent effective
+couplings
+\begin{align}
+  F_i(\varphi) &= F_i^\ast
+  \frac{\sin^2\varphi + s_{\min}^2}
+       {\sin^2\varphi_\ast + s_{\min}^2},
+  \label{eq:f-squared-floor}
+\end{align}
+where $\varphi_\ast$ is a reference latitude and $s_{\min}>0$ floors the
+Coriolis factor.  This is the ``$f^2$ floor'' profile.  A reciprocal diagnostic
+profile replaces the final ratio by its inverse.  Once $F_i$ varies with
+latitude, Eq.~\eqref{eq:qg-inversion} is no longer diagonal in spherical
+harmonic degree, so the spike uses dense fixed-$m$ linear inversions before
+attempting nonlinear time stepping.
+
+\section{Spectral inversion}
+
+Let $L_\ell = \ell(\ell+1)$ on the unit sphere.  Since
+$\lapS \to -L_\ell$, Eq.~\eqref{eq:qg-inversion} gives, for each
+$(\ell,m)$,
+\begin{equation}
+  \begin{bmatrix}
+    \widehat{q_1'}\\
+    \widehat{q_2'}
+  \end{bmatrix}_{\ell m}
+  =
+  \begin{bmatrix}
+    -L_\ell - F_1 & F_1\\
+    F_2 & -L_\ell - F_2
+  \end{bmatrix}
+  \begin{bmatrix}
+    \widehat{\psi_1}\\
+    \widehat{\psi_2}
+  \end{bmatrix}_{\ell m}.
+  \label{eq:spectral-inversion}
+\end{equation}
+The $(\ell,m)=(0,0)$ barotropic null mode is gauge-fixed by setting the
+mean streamfunction to zero.  Operationally, the inversion sets
+$\widehat{\psi_1}_{00}=\widehat{\psi_2}_{00}=0$ and removes any mean PV
+component that is not dynamically meaningful.
+
+\section{Background zonal shear}
+
+To test Phillips-style baroclinic instability, the implemented model may
+evolve perturbations about a prescribed zonal base state
+$\Psi_i^0(\varphi)$.  The first base state is the smooth global profile
+\begin{equation}
+  \Psi_i^0(\varphi) = -U_i\sin\varphi,
+\end{equation}
+which gives zonal velocity $u_i^0 = U_i\cos\varphi$ on the unit sphere.
+Exact spherical linear checks show that this solid-body profile is a neutral
+control rather than a useful Phillips-instability case.  A second regular
+curved-shear profile is therefore
+\begin{equation}
+  \Psi_i^0(\varphi)
+  =
+  -U_i\left(\sin\varphi + a_3\sin^3\varphi\right),
+  \qquad a_3 = 0.75 \text{ by default}.
+\end{equation}
+The curved profile remains polar-regular because its zonal velocity is
+proportional to $\cos\varphi$, but it has nontrivial meridional PV curvature
+and supports unstable two-layer modes in the linear spectrum.
+We parameterize
+\begin{align}
+  U_1 &= U_{\mathrm{bt}} + \frac{1}{2}U_{\mathrm{bc}},\\
+  U_2 &= U_{\mathrm{bt}} - \frac{1}{2}U_{\mathrm{bc}},
+\end{align}
+where $U_{\mathrm{bc}}$ is the layer shear.
+
+The base PVs are
+\begin{align}
+  Q_1^0 &= \lapS \Psi_1^0 + F_1(\Psi_2^0-\Psi_1^0) + f,\\
+  Q_2^0 &= \lapS \Psi_2^0 + F_2(\Psi_1^0-\Psi_2^0) + f.
+\end{align}
+The prognostic state remains the perturbation PV anomaly $q_i'$.
+
+\section{Spherical Jacobian}
+
+The advective Jacobian on the sphere is
+\begin{equation}
+  \jacS(a,b)
+  =
+  \frac{1}{\cos\varphi}
+  \left(
+    \frac{\partial a}{\partial \lambda}
+    \frac{\partial b}{\partial \varphi}
+    -
+    \frac{\partial a}{\partial \varphi}
+    \frac{\partial b}{\partial \lambda}
+  \right),
+\end{equation}
+up to the sign convention used by Dinosaur's vorticity/velocity helpers.
+The spike must verify this sign convention using a manufactured field test.
+
+\section{Masked/tapered evolution}
+
+The broad target is not a hard polar cap.  We introduce a smooth
+Tukey-style latitude envelope $\chiM(\varphi)$:
+\begin{equation}
+  0 \le \chiM(\varphi) \le 1.
+\end{equation}
+For a southern-hemisphere configuration, the taper may begin equatorward
+of approximately $30^\circ$S, with a broad transition toward the invalid
+or less-trusted low-latitude reservoir.  The exact plateau and taper
+locations are experimental parameters.
+
+The perturbation tendency model is
+\begin{align}
+  \partial_t q_1'
+  &=
+  -\chiM\left[
+    \jacS(\psi_1',q_1'+Q_1^0)
+    + \jacS(\Psi_1^0,q_1')
+  \right]
+  - \sponge(1-\chiM)\,q_1'
+  - \mathcal{D}q_1'
+  + \chiM\,\mathcal{F}_1,\\
+  \partial_t q_2'
+  &=
+  -\chiM\left[
+    \jacS(\psi_2',q_2'+Q_2^0)
+    + \jacS(\Psi_2^0,q_2')
+  \right]
+  - \sponge(1-\chiM)\,q_2'
+  - \mathcal{D}q_2'
+  + \chiM\,\mathcal{F}_2.
+  \label{eq:tendency}
+\end{align}
+Here $\mathcal{D}$ is hyperdiffusion or spectral filtering and
+$\mathcal{F}_{1,2}$ are optional relaxation/forcing terms.
+
+This is a deliberate first model, not a conservation theorem.  Multiplying
+nonlinear tendencies by $\chiM$ will generally break exact PV/enstrophy
+conservation.  The spike must diagnose whether the resulting spectral
+ringing/leakage is acceptable.  Alternative variants include applying
+$\chiM$ only to forcing and sponge terms, leaving the advective tendency
+unmasked.
+
+\section{Time stepping}
+
+The first implementation should use a simple explicit RK4 or SSPRK scheme:
+\begin{equation}
+  q'^{n+1} = \mathrm{RK}(q'^n,\Dt).
+\end{equation}
+This keeps the feasibility spike focused on transforms, inversion, masking,
+and sharding.  IMEX machinery is not needed until the model graduates toward
+NHQGE vertical coupling.
+
+\section{Numerical method checklist}
+
+\begin{enumerate}[leftmargin=2em]
+  \item Build or import Dinosaur coordinate and spherical-harmonic transform
+  objects.
+  \item Verify spectral-to-nodal-to-spectral roundtrip for scalar fields.
+  \item Verify $\lapS \Ylm = -\ell(\ell+1)\Ylm$ in Dinosaur's convention.
+  \item Implement Eq.~\eqref{eq:spectral-inversion} and verify recovery of
+  manufactured $\psi_1,\psi_2$.
+  \item Implement $\jacS(\psi_i,Q_i)$ using Dinosaur derivative/velocity
+  helpers where possible.
+  \item Add $\chiM(\varphi)$, sponge, forcing, and diagnostics.
+  \item Benchmark the same step function on one GPU and with Dinosaur-style
+  sharding over multiple GPUs.
+\end{enumerate}
+
+\section{Diagnostics}
+
+The spike should report at least:
+\begin{itemize}[leftmargin=2em]
+  \item spectral roundtrip residuals,
+  \item inversion residuals for Eq.~\eqref{eq:spectral-inversion},
+  \item maximum and spectrum of masked tendency fields,
+  \item energy/enstrophy-like diagnostics inside the trusted window,
+  \item leakage diagnostics in the sponge/low-latitude reservoir,
+  \item wall time per step and transform count.
+\end{itemize}
+
+\end{document}
