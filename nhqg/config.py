@@ -30,6 +30,10 @@ class NHQGConfig:
     thermal_closure: str = "fixed_conduction"  # or "evolve_mean"
     mean_temp_eps_sq: float = 1.0  # epsilon^2 prefactor in d_t Theta_bar
     q_boundary: str = "none"  # "none" (Miquel-style) or "neumann" (stress-free q')
+    w_bc_top: str = "dirichlet"  # w BC at Z=1: "dirichlet" (rigid lid, w=0) or
+                                 # "neumann" (open surface, dw/dZ=0); bottom is
+                                 # always w=0. theta/Theta_bar stay Dirichlet
+                                 # at both ends (conducting free surface, D1).
     nonlinear_advection: str = "jacobian"  # "jacobian" or "flux"
 
     # --- Time stepping ---

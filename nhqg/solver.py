@@ -419,7 +419,7 @@ def _explicit_rhs_vertical_dealiased(state: State, grid: Grid) -> State:
     """Explicit RHS with overresolved vertical collocation and coefficient truncation."""
     q_hat, w_hat, th_hat, th_bar = state
     psi_hat = invert_psi(q_hat, grid.inv_denom)
-    w_cheb = _dirichlet_to_cheb(w_hat, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(w_hat, grid.w_stencil)
     th_cheb = _dirichlet_to_cheb(th_hat, grid.dirichlet_stencil)
 
     psi_nodal = _to_nodal(psi_hat, grid.V_dealias)
@@ -441,7 +441,7 @@ def _explicit_rhs_vertical_dealiased(state: State, grid: Grid) -> State:
     Ath = _truncate_cheb_coeffs(Ath_hi, grid.Nz)
 
     E_q = -Aq - 1j * grid.beta * grid.kx[None, :, :] * psi_hat
-    E_w = _cheb_to_dirichlet(project_dirichlet(-Aw, grid.proj_dirichlet), grid.dirichlet_pinv)
+    E_w = _cheb_to_dirichlet(project_dirichlet(-Aw, grid.proj_w), grid.w_pinv)
     E_th_adv = _cheb_to_dirichlet(project_dirichlet(-Ath, grid.proj_dirichlet), grid.dirichlet_pinv)
 
     if grid.thermal_closure == "evolve_mean":
@@ -501,7 +501,7 @@ def explicit_rhs(state: State, grid: Grid) -> State:
     """
     q_hat, w_hat, th_hat, th_bar = state
     psi_hat = invert_psi(q_hat, grid.inv_denom)
-    w_cheb = _dirichlet_to_cheb(w_hat, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(w_hat, grid.w_stencil)
     th_cheb = _dirichlet_to_cheb(th_hat, grid.dirichlet_stencil)
 
     # Convert to CGL nodal values for Jacobian evaluation
@@ -527,7 +527,7 @@ def explicit_rhs(state: State, grid: Grid) -> State:
     # Assemble explicit tendencies (in coefficient space)
     # Ra*theta remains implicit through the buoyancy block-elimination.
     E_q = -Aq - 1j * grid.beta * grid.kx[None, :, :] * psi_hat
-    E_w = _cheb_to_dirichlet(project_dirichlet(-Aw, grid.proj_dirichlet), grid.dirichlet_pinv)
+    E_w = _cheb_to_dirichlet(project_dirichlet(-Aw, grid.proj_w), grid.w_pinv)
     E_th_adv = _cheb_to_dirichlet(project_dirichlet(-Ath, grid.proj_dirichlet), grid.dirichlet_pinv)
 
     if grid.thermal_closure == "evolve_mean":
@@ -594,15 +594,18 @@ def implicit_tendency(state: State, grid: Grid) -> State:
     I_th_bar = (eps^2 / sigma) * G_Z2 @ th_bar
     """
     q_hat, w_hat, th_hat, th_bar = state
-    w_cheb = _dirichlet_to_cheb(w_hat, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(w_hat, grid.w_stencil)
     th_cheb = _dirichlet_to_cheb(th_hat, grid.dirichlet_stencil)
 
     dw_dZ = jnp.einsum('ij,j...->i...', grid.G_Z, w_cheb)
     dq_dZ = jnp.einsum('ij,j...->i...', grid.G_Z, q_hat)
     I_w_cheb = grid.inv_denom[None, :, :] * dq_dZ + grid.Ra_sigma * th_cheb
-    I_w = _cheb_to_dirichlet(project_dirichlet(I_w_cheb, grid.proj_dirichlet), grid.dirichlet_pinv)
+    I_w = _cheb_to_dirichlet(project_dirichlet(I_w_cheb, grid.proj_w), grid.w_pinv)
 
-    I_th = w_hat
+    # w's source in the theta equation: reduced coordinates differ when the
+    # bases differ, so map w-basis -> theta-basis (identity when shared)
+    I_th = (w_hat if grid.map_w_to_th is None
+            else _apply_vertical_matrix(grid.map_w_to_th, w_hat))
     if grid.thermal_closure == "evolve_mean":
         I_th_bar = (grid.mean_temp_eps_sq / grid.sigma) * (grid.G_Z2 @ th_bar)
     else:
@@ -665,8 +668,12 @@ def imex_implicit_solve(R_q: jnp.ndarray, R_w: jnp.ndarray,
     gamma = grid.gamma_imex
     dt = grid.dt
 
-    # Step 0: Modified w RHS from buoyancy block-elimination
-    R_w_eff = R_w + gamma * dt * grid.Ra_sigma * R_th * grid.inv_alpha_th[None, :, :]
+    # Step 0: Modified w RHS from buoyancy block-elimination (theta-basis
+    # contribution mapped into w's basis when the bases differ)
+    rth_scaled = R_th * grid.inv_alpha_th[None, :, :]
+    if grid.map_th_to_w is not None:
+        rth_scaled = _apply_vertical_matrix(grid.map_th_to_w, rth_scaled)
+    R_w_eff = R_w + gamma * dt * grid.Ra_sigma * rth_scaled
 
     # Step 1: solve the q stage operator (scalar for 'none', per-shell tau
     # solve for 'neumann')
@@ -678,8 +685,8 @@ def imex_implicit_solve(R_q: jnp.ndarray, R_w: jnp.ndarray,
     # Step 2: w RHS = R_w_eff + gamma*dt*c(k)*P_gal[G_Z @ temp]
     d_temp = jnp.einsum('ij,j...->i...', grid.G_Z, temp)
     d_temp_gal = _cheb_to_dirichlet(
-        project_dirichlet(grid.inv_denom[None, :, :] * d_temp, grid.proj_dirichlet),
-        grid.dirichlet_pinv,
+        project_dirichlet(grid.inv_denom[None, :, :] * d_temp, grid.proj_w),
+        grid.w_pinv,
     )
     rhs_w = R_w_eff + gamma * dt * d_temp_gal
 
@@ -688,7 +695,7 @@ def imex_implicit_solve(R_q: jnp.ndarray, R_w: jnp.ndarray,
                               grid.imex_matmul_chunk)
 
     # Step 4: Back-substitute q = q_solve @ (R_q + gamma*dt*G_Z@w)
-    w_cheb = _dirichlet_to_cheb(w_new, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(w_new, grid.w_stencil)
     dw_dZ = jnp.einsum('ij,j...->i...', grid.G_Z, w_cheb)
     combined = R_q + gamma * dt * dw_dZ
     if grid.q_boundary == "neumann":
@@ -696,7 +703,10 @@ def imex_implicit_solve(R_q: jnp.ndarray, R_w: jnp.ndarray,
     q_new = _q_stage_solve(combined, grid)
 
     # Step 5: Back-substitute theta = (R_th + gamma*dt*w) / alpha_th
-    th_new = (R_th + gamma * dt * w_new) * grid.inv_alpha_th[None, :, :]
+    # (w mapped into theta's basis when the bases differ)
+    w_for_th = (w_new if grid.map_w_to_th is None
+                else _apply_vertical_matrix(grid.map_w_to_th, w_new))
+    th_new = (R_th + gamma * dt * w_for_th) * grid.inv_alpha_th[None, :, :]
 
     return q_new, w_new, th_new
 
@@ -1225,8 +1235,8 @@ def _apply_bcs(state: State, grid: Grid) -> State:
     """Enforce all BCs via tau projection."""
     q = _apply_q_boundary(state.q_hat, grid)
     w = _cheb_to_dirichlet(
-        project_dirichlet(_dirichlet_to_cheb(state.w_hat, grid.dirichlet_stencil), grid.proj_dirichlet),
-        grid.dirichlet_pinv,
+        project_dirichlet(_dirichlet_to_cheb(state.w_hat, grid.w_stencil), grid.proj_w),
+        grid.w_pinv,
     )
     th = _cheb_to_dirichlet(
         project_dirichlet(_dirichlet_to_cheb(state.th_hat, grid.dirichlet_stencil), grid.proj_dirichlet),
@@ -1286,8 +1296,8 @@ def rk4_step(state: State, grid: Grid) -> State:
     # BC projection
     q_new = _apply_q_boundary(q_new, grid)
     w_new = _cheb_to_dirichlet(
-        project_dirichlet(_dirichlet_to_cheb(w_new, grid.dirichlet_stencil), grid.proj_dirichlet),
-        grid.dirichlet_pinv,
+        project_dirichlet(_dirichlet_to_cheb(w_new, grid.w_stencil), grid.proj_w),
+        grid.w_pinv,
     )
     th_new = _cheb_to_dirichlet(
         project_dirichlet(_dirichlet_to_cheb(th_new, grid.dirichlet_stencil), grid.proj_dirichlet),

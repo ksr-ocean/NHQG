@@ -47,6 +47,13 @@ class Grid(NamedTuple):
     V_exchange_inv: jnp.ndarray  # (Nz_exchange, Nz_exchange) work-grid values -> coeffs
     dirichlet_stencil: jnp.ndarray  # (Nz+1, Nz-1) Galerkin Dirichlet -> Chebyshev
     dirichlet_pinv: jnp.ndarray     # (Nz-1, Nz+1) unique-Chebyshev left inverse
+    w_stencil: jnp.ndarray       # (Nz+1, Nz-1) w Galerkin basis -> Chebyshev;
+                                 # == dirichlet_stencil unless w_bc_top='neumann'
+                                 # (then the Shen mixed bottom-Dirichlet/top-Neumann basis)
+    w_pinv: jnp.ndarray          # (Nz-1, Nz+1) exact left inverse of w_stencil
+    map_w_to_th: jnp.ndarray | None  # (Nz-1, Nz-1) th_pinv @ w_stencil; None when
+                                     # w and theta share the Dirichlet basis
+    map_th_to_w: jnp.ndarray | None  # (Nz-1, Nz-1) w_pinv @ th_stencil; None likewise
     V_exchange_dirichlet: jnp.ndarray  # (Nz_exchange, Nz-1) Dirichlet coeffs -> thermal work-grid values
     G_exchange: jnp.ndarray   # (Nz_exchange, Nz+1) mean coeffs -> work-grid d/dZ values
     exchange_weights: jnp.ndarray  # (Nz_exchange,) quadrature weights on the work grid
@@ -89,6 +96,8 @@ class Grid(NamedTuple):
     # Tau BC projection matrices (for RK4 / post-step BC enforcement)
     proj_dirichlet: jnp.ndarray  # (Nz+1, Nz+1) projects coeffs to satisfy Dirichlet
     proj_neumann: jnp.ndarray    # (Nz+1, Nz+1) projects coeffs to satisfy Neumann
+    proj_w: jnp.ndarray          # (Nz+1, Nz+1) tau projection for w's BC pair;
+                                 # == proj_dirichlet unless w_bc_top='neumann'
 
     # Scalar parameters (as 0-d arrays for JIT compatibility)
     beta: jnp.ndarray
@@ -114,6 +123,7 @@ class Grid(NamedTuple):
     Npad: int
     thermal_closure: str
     q_boundary: str
+    w_bc_top: str
     nonlinear_advection: str
     vertical_cutoff_n: int | None
     imex_scheme: str
@@ -303,23 +313,55 @@ def _build_tau_projection(tau_rows: np.ndarray, Nz: int,
     return P
 
 
+def _mixed_bd_tn_stencil(N: int, dtype=np.float64) -> np.ndarray:
+    """Shen-type Chebyshev-Galerkin stencil for mixed BCs:
+    Dirichlet at the bottom (Z=0, xi=-1), Neumann at the top (Z=1, xi=+1).
+
+    Basis functions phi_n = T_n + a_n T_{n+1} + b_n T_{n+2}, n = 0..N-2, with
+    (a_n, b_n) solving phi_n(-1) = 0 and phi_n'(+1) = 0:
+        b_n = -(n^2 + (n+1)^2) / ((n+1)^2 + (n+2)^2),   a_n = 1 + b_n
+    (from T_n(-1) = (-1)^n, T_n'(+1) = n^2). Leading coefficient 1 on T_n, so
+    the top (N-1)x(N-1) block is unit lower-triangular and the exact
+    "unique Chebyshev coefficient" left inverse exists (same construction as
+    the Dirichlet stencil -- never use a Moore-Penrose pinv here, see the
+    2026-03 lesson).
+    """
+    S = np.zeros((N + 1, N - 1), dtype=dtype)
+    for n in range(N - 1):
+        b = -(n ** 2 + (n + 1) ** 2) / ((n + 1) ** 2 + (n + 2) ** 2)
+        a = 1.0 + b
+        S[n, n] = 1.0
+        S[n + 1, n] = a
+        S[n + 2, n] = b
+    return S
+
+
 # ---------------------------------------------------------------------------
 # IMEX inverse precomputation with |k|² shell dedup (tau method)
 # ---------------------------------------------------------------------------
 
-def _build_imex_inv(G_Z: np.ndarray, dirichlet_stencil: np.ndarray,
-                    dirichlet_pinv: np.ndarray, ksq_flat: np.ndarray,
+def _build_imex_inv(G_Z: np.ndarray, w_stencil: np.ndarray,
+                    w_pinv: np.ndarray, ksq_flat: np.ndarray,
                     tau_neu: np.ndarray, tau_dir: np.ndarray,
                     Ld_inv_sq: float, dt: float, gamma: float, Nz: int,
                     nu_q: float, nu_w: float, nu_theta: float,
                     sigma: float, Ra_sigma: float,
                     drag: float, hyper_order: int,
-                    q_boundary: str, dtype=np.float64):
+                    q_boundary: str, buoyancy_K: np.ndarray | None = None,
+                    dtype=np.float64):
     """Precompute IMEX inverse matrices for the q-w block.
 
-    Dirichlet BCs for w are always enforced via tau rows. For q, the solve is
-    either unconstrained (Miquel-style, ``q_boundary='none'``) or uses the
-    historical Neumann tau rows (``q_boundary='neumann'``).
+    The w solve is assembled in w's Galerkin basis (w_stencil/w_pinv). For q,
+    the solve is either unconstrained (Miquel-style, ``q_boundary='none'``)
+    or uses the historical Neumann tau rows (``q_boundary='neumann'``).
+
+    buoyancy_K: when w and theta live in DIFFERENT Galerkin bases (mixed
+    w BCs), the scalar buoyancy elimination alpha_w_eff = alpha_w -
+    (gamma*dt)^2 * Ra_sigma / alpha_th generalizes to subtracting
+    (gamma*dt)^2 * (Ra_sigma/alpha_th(k)) * K with the fixed matrix
+    K = (w_pinv @ th_stencil) @ (th_pinv @ w_stencil). Shell dedup survives
+    because alpha_th depends only on |k|^2. None -> shared basis, exact
+    historical scalar path (bitwise).
     """
     N = Nz
     I = np.eye(N + 1, dtype=dtype)
@@ -366,14 +408,19 @@ def _build_imex_inv(G_Z: np.ndarray, dirichlet_stencil: np.ndarray,
         else:
             raise ValueError(f"Unsupported q_boundary={q_boundary!r}")
 
+        if buoyancy_K is None:
+            couple = alpha_w_eff * np.eye(N_gal, dtype=dtype)
+        else:
+            couple = (alpha_w * np.eye(N_gal, dtype=dtype)
+                      - (gamma * dt) ** 2 * (Ra_sigma / alpha_th) * buoyancy_K)
+
         denom = ksq_val + Ld_inv_sq
         if denom == 0.0:
-            A = alpha_w_eff * np.eye(N_gal, dtype=dtype)
-            inv_matrices[s] = np.linalg.inv(A)
+            inv_matrices[s] = np.linalg.inv(couple)
         else:
             c_k = 1.0 / denom
-            B = dirichlet_pinv @ G_Z @ q_solve @ G_Z @ dirichlet_stencil
-            A = alpha_w_eff * np.eye(N_gal, dtype=dtype) - (gamma * dt) ** 2 * c_k * B
+            B = w_pinv @ G_Z @ q_solve @ G_Z @ w_stencil
+            A = couple - (gamma * dt) ** 2 * c_k * B
             inv_matrices[s] = np.linalg.inv(A)
 
     return inv_matrices, q_solve_matrices, inverse_idx.astype(np.int32)
@@ -471,6 +518,36 @@ def make_grid(cfg: NHQGConfig) -> Grid:
     # ── Tau projection matrices (for RK4 / post-step BC enforcement) ──
     proj_dir_np = _build_tau_projection(tau_dir, N, dtype=build_dtype)
     proj_neu_np = _build_tau_projection(tau_neu, N, dtype=build_dtype)
+
+    # ── w vertical basis: both-Dirichlet (rigid lid) or mixed bottom-Dirichlet /
+    #    top-Neumann (open surface). theta always keeps the Dirichlet basis (D1).
+    if cfg.w_bc_top == "dirichlet":
+        w_stencil_np = dirichlet_stencil_np
+        w_pinv_np = dirichlet_pinv_np
+        proj_w_np = proj_dir_np
+        map_w_to_th_np = None
+        map_th_to_w_np = None
+        buoyancy_K_np = None
+    elif cfg.w_bc_top == "neumann":
+        if cfg.thermal_closure != "fixed_conduction":
+            raise NotImplementedError(
+                "w_bc_top='neumann' currently requires "
+                "thermal_closure='fixed_conduction': the evolve_mean exchange "
+                "paths still lift w through the Dirichlet stencil (M2b plumbing).")
+        if cfg.vertical_cutoff_n is not None:
+            raise NotImplementedError(
+                "w_bc_top='neumann' with vertical_cutoff_n is not wired up.")
+        w_stencil_np = _mixed_bd_tn_stencil(N, dtype=build_dtype)
+        w_pinv_np = np.zeros((N - 1, N + 1), dtype=build_dtype)
+        w_pinv_np[:, :N - 1] = np.linalg.inv(w_stencil_np[:N - 1, :])
+        # tau projection for w's BC pair: Neumann at top (Z=1), Dirichlet at bottom
+        tau_w = np.stack([tau_neu[0], tau_dir[1]])
+        proj_w_np = _build_tau_projection(tau_w, N, dtype=build_dtype)
+        map_w_to_th_np = dirichlet_pinv_np @ w_stencil_np
+        map_th_to_w_np = w_pinv_np @ dirichlet_stencil_np
+        buoyancy_K_np = map_th_to_w_np @ map_w_to_th_np
+    else:
+        raise ValueError(f"Unsupported w_bc_top={cfg.w_bc_top!r}")
 
     # Coefficient-space L2 mass matrix on [0,1], exact under CC quadrature.
     mean_mass_np = V_np.T @ (cc_w[:, None] * V_np)
@@ -578,11 +655,11 @@ def make_grid(cfg: NHQGConfig) -> Grid:
     # ── IMEX inverse matrices (tau method, coefficient space) ──
     ksq_flat = ksq_np.ravel()
     inv_matrices, q_solve_matrices, ksq_idx_flat = _build_imex_inv(
-        G_Z_np, dirichlet_stencil_np, dirichlet_pinv_np, ksq_flat, tau_neu, tau_dir,
+        G_Z_np, w_stencil_np, w_pinv_np, ksq_flat, tau_neu, tau_dir,
         Ld_inv_sq, dt, gamma_imex, Nz,
         cfg.nu_q, cfg.nu_w, cfg.nu_theta, cfg.sigma,
         cfg.Ra_tilde / cfg.sigma, cfg.drag, cfg.hyper_order,
-        cfg.q_boundary, dtype=build_dtype
+        cfg.q_boundary, buoyancy_K=buoyancy_K_np, dtype=build_dtype
     )
     ksq_idx_2d = ksq_idx_flat.reshape(Nx, Nk)
 
@@ -606,6 +683,10 @@ def make_grid(cfg: NHQGConfig) -> Grid:
         V_exchange_inv=to_jax(V_exchange_inv_np),
         dirichlet_stencil=to_jax(dirichlet_stencil_np),
         dirichlet_pinv=to_jax(dirichlet_pinv_np),
+        w_stencil=to_jax(w_stencil_np),
+        w_pinv=to_jax(w_pinv_np),
+        map_w_to_th=(to_jax(map_w_to_th_np) if map_w_to_th_np is not None else None),
+        map_th_to_w=(to_jax(map_th_to_w_np) if map_th_to_w_np is not None else None),
         V_exchange_dirichlet=to_jax(V_exchange_dirichlet_np),
         G_exchange=to_jax(G_exchange_np),
         exchange_weights=to_jax(exchange_weights_np),
@@ -637,6 +718,7 @@ def make_grid(cfg: NHQGConfig) -> Grid:
         ksq_idx=jnp.array(ksq_idx_2d, dtype=jnp.int32),
         proj_dirichlet=to_jax(proj_dir_np),
         proj_neumann=to_jax(proj_neu_np),
+        proj_w=to_jax(proj_w_np),
         beta=to_jax(np.array(cfg.beta)),
         eta_hat=(jnp.array(eta_hat_np, dtype=cfg.complex_dtype)
                  if eta_hat_np is not None else None),
@@ -656,6 +738,7 @@ def make_grid(cfg: NHQGConfig) -> Grid:
         Npad=Npad,
         thermal_closure=cfg.thermal_closure,
         q_boundary=cfg.q_boundary,
+        w_bc_top=cfg.w_bc_top,
         nonlinear_advection=cfg.nonlinear_advection,
         vertical_cutoff_n=cfg.vertical_cutoff_n,
         imex_scheme=cfg.imex_scheme,
