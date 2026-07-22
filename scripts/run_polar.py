@@ -41,6 +41,10 @@ def _parse_args():
     parser.add_argument("--init-amplitude", type=float, default=1e-3)
     parser.add_argument("--init-kpeak", type=float, default=K_C)
     parser.add_argument("--init-kwidth", type=float, default=0.4)
+    parser.add_argument("--init-confine-radius", type=float, default=None,
+                        help="taper the barotropic-vorticity init to r < this "
+                             "radius about the domain centre (SYI22 polar-cap "
+                             "style); default: fill the whole domain")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--nu-q", type=float, default=1.0)
     parser.add_argument("--nu-w", type=float, default=1.0)
@@ -119,7 +123,22 @@ def _make_barotropic_vorticity_state(args, grid, L):
     ky_int = np.arange(args.Nx // 2 + 1, dtype=int)[None, :]
     mask = (np.abs(kx_int) <= args.Nx // 3) & (ky_int <= args.Nx // 3)
     zeta = np.fft.irfft2(zhat * annulus * mask, s=(args.Nx, args.Nx))
-    zeta *= args.init_amplitude / zeta.std()
+
+    if args.init_confine_radius is not None:
+        # SYI22-style polar-cap confinement: smooth taper at r_c, width ~2
+        # initial wavelengths, then re-band-limit. Amplitude is normalised
+        # over the cap interior, not the whole domain.
+        xg = np.arange(args.Nx) * L / args.Nx
+        X, Y = np.meshgrid(xg, xg, indexing="ij")
+        r = np.hypot(X - L / 2.0, Y - L / 2.0)
+        w_tap = 2.0 * 2.0 * np.pi / args.init_kpeak
+        taper = 0.5 * (1.0 - np.tanh((r - args.init_confine_radius) / w_tap))
+        zeta = zeta * taper
+        zeta = np.fft.irfft2(np.fft.rfft2(zeta) * mask, s=(args.Nx, args.Nx))
+        inside = r < args.init_confine_radius
+        zeta *= args.init_amplitude / zeta[inside].std()
+    else:
+        zeta *= args.init_amplitude / zeta.std()
     zhat_final = np.fft.rfft2(zeta)
 
     q_hat = np.zeros((args.Nz + 1, args.Nx, args.Nx // 2 + 1), dtype=np.complex128)
