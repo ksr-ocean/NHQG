@@ -56,10 +56,21 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       lands differently in the two forms — 32_rule fine print, documented);
       guard + exclusivity raise; production-flavor 23_rule trap run finite &
       band-limited. Suite: 106 passed.
-- [ ] **M1 gate (P0 validation)**: quasi-barotropic crystal forms; radius
+- [~] **M1 gate (P0 validation)**: quasi-barotropic crystal forms; radius
       tracks L_γ=(U/γ)^{1/3} across ≥3 γ values. [GPU 6/7, lead]
       Driver ready: `scripts/run_polar.py --init barotropic-vorticity --Ra 0`
       (2026-07-22, codex, `f437827`); analysis via `nhqg/polar_diagnostics.py`.
+      **Runs LAUNCHED 2026-07-22**: 512²×8, L=48Lc, Ra=0, ζ_rms=1 (seed 0,
+      k_peak=1.3048 ⇒ U≈0.77, KE₀=0.309 ✓), ν=1e-4 hyper_order=4, dt=0.01,
+      t_final=1000; γ=0.005 on GPU6, γ=0.02→γ=0.08 chained on GPU7;
+      `output/polar_p0_bt_g{γ}_Nx512_Nz8_L48`. CPU smoke of the exact config
+      passed first (trap guard OK at production geometry). L_γ ≈ 5.4/3.4/2.1
+      vs trap r* = 52. **Analysis tooling ready** (2026-07-22, codex #2,
+      verified): `scripts/analyze_polar_p0.py` — crystal_metrics (R_crystal,
+      NN spacing via periodic min-image), per-run overlays, log-log slope
+      fits vs L_γ; gate = synthetic 19-vortex lattice with exact R/spacing
+      (`tests/test_analyze_polar_p0.py`). Live mid-run smoke at t=95 sane
+      (γ=0.02: U=0.705, 356 vortices, not yet organized).
 
 ## M2 — Mixed BCs: Dirichlet bottom / Neumann-w top [independent of M1]
 
@@ -71,10 +82,18 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       per-field operators. Both-Dirichlet path shares the same arrays and
       expressions (bitwise). 13 tests incl. open-top vs rigid-lid control and
       mixed IMEX-vs-RK4.
-- [ ] **M2b plumbing** (codex-able, lead-written gates): exchange paths /
-      `io.py` / `diagnostics.py` w lifts → `w_stencil`; then LIFT the
-      restriction (currently `w_bc_top='neumann'` requires
-      `fixed_conduction` and no `vertical_cutoff_n` — enforced in make_grid).
+- [x] **M2b plumbing** (2026-07-22, codex, verified §6): all w lifts in
+      exchange paths / `io.py` / `diagnostics.py` → `w_stencil`/`w_pinv`/
+      `proj_w`; `horizontal_mean_wtheta` takes split w/θ stencils (all call
+      sites updated); both make_grid guards removed. Lead gates
+      (`tests/test_mixed_bc_plumbing.py`, RED 3 / GREEN 1 pre-dispatch) all
+      GREEN: neumann+evolve_mean exact BCs, SBP exchange residual still
+      structural-zero under open top, neumann+vertical_cutoff BC-exact,
+      both-Dirichlet evolve_mean **bitwise** vs stored ref. Lead follow-ups:
+      w-budget source projections in `compute_w_theta_budgets` → `proj_w`
+      (no-op for dirichlet); obsolete guard test flipped to permit-check;
+      4 test call sites updated to the new signature. Codex correctly
+      STOPPED on the test conflict instead of editing gates. Suite: 141.
 - [x] EVP onset gate (2026-07-22, `f437827`, lead): `nhqg/linear_onset.py`
       assembles the exact linear operator of the discretized solver per k;
       validated vs closed-form both-Dirichlet dispersion (1e-8) and
