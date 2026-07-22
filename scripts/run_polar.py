@@ -54,6 +54,7 @@ def _parse_args():
     )
     parser.add_argument("--mean-exchange", type=str, default="balanced_sbp2_pc")
     parser.add_argument("--sbp-substeps", type=int, default=4)
+    parser.add_argument("--w-bc-top", choices=["dirichlet", "neumann"], default="dirichlet")
     parser.add_argument("--advection", choices=["flux", "jacobian"], default="flux")
     parser.add_argument("--dealias", choices=["23_rule", "32_rule"], default="23_rule")
     parser.add_argument("--imex-matmul-chunk", type=int, default=0)
@@ -186,6 +187,7 @@ def main():
         t_final=args.t_final,
         float_dtype="float64",
         thermal_closure=args.thermal_closure,
+        w_bc_top=args.w_bc_top,
         mean_exchange_discretization=args.mean_exchange,
         sbp_corrector_substeps=args.sbp_substeps,
         nonlinear_advection=args.advection,
