@@ -81,7 +81,22 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       queued detached behind the γ=0.005 continuation on GPU7.
       CAUTION for M4/M5: the convective campaign at γ~O(0.1)·(calibrated)
       may face the same edge-wave constraint under ars222 — either rk443
-      for trapped runs or dt set by (ω_edge·dt) ≲ 0.1, not advective CFL. **Analysis tooling ready** (2026-07-22, codex #2,
+      for trapped runs or dt set by (ω_edge·dt) ≲ 0.1, not advective CFL.
+      **rk443 stability VALIDATED** (2026-07-22): γ=0.08 sharp trap,
+      monotone KE decay through t=159 where ars222 blew at t=48; archived
+      `*_rk443_decay_t159`. rk443 costs ~5× ars222 per t.u. at 512²×8.
+      **FINDING 2 (2026-07-22): decaying runs DON'T crystallize** — they
+      zonate (ring jets + lone polar cyclone + trap-edge ring; overlays in
+      `analysis/polar_p0/`). SYI22 barotropic crystals need sustained
+      stochastic storm injection (NHGQ_polar.tex §Forcing anticipated
+      this). Driver now has --inject-* (Gaussian cyclones, k=0 absorbed).
+      Injection pilot (γ=0.02, A=6, r=2.4, 1/t.u., drag 0.02, t=100):
+      equilibrium KE≈4.9 (U≈3.1), discrete persistent storms ✓.
+      **FORCED campaign P0F running** (GPU7, detached): γ=0.005 → γ=0.02,
+      t=600 each, ~1.8 h each; γ=0.08 leg deferred to a scheme/dt decision
+      (rk443 ~10 h vs ars222@dt/4 ~7 h) after the first two report.
+      Decaying-run data (rings/zonation) retained — publishable contrast
+      case for the regime diagram. **Analysis tooling ready** (2026-07-22, codex #2,
       verified): `scripts/analyze_polar_p0.py` — crystal_metrics (R_crystal,
       NN spacing via periodic min-image), per-run overlays, log-log slope
       fits vs L_γ; gate = synthetic 19-vortex lattice with exact R/spacing
@@ -133,12 +148,19 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
 - [x] CPU gates (2026-07-22, `tests/test_sharding.py`, 3 passed): kx wiring
       + local shard shapes; z-rejection documented; sharded IMEX implicit
       solve (per-shell gather/matmul core) matches unsharded to 1e-13.
-- [ ] **GPU gate** (written, auto-skips off-GPU): full-step 1-vs-2 GPU
-      trajectory match <1e-12, 50 steps — run
-      `CUDA_VISIBLE_DEVICES=6,7 pytest tests/test_sharding.py -k GPU`
-      when the P0 chain drains. Then 200-step match at 128²×64.
-- [ ] Measure kx-sharding speedup at 256²×64, then ≥1.6× steps/s gate at
-      512²×64; balanced util on 6/7 only. [GPU 6/7]
+- [x] **GPU correctness gate PASSED** (2026-07-22): full-step 1-vs-2 GPU
+      trajectory match <1e-12 (50 steps, production open-top+evolve_mean
+      config) on GPUs 6+7.
+- [!] **Throughput gate FAILED under pure propagation** (2026-07-22):
+      512²×64 production config, H200 ×2: 1 GPU 41.9 ms/step, 2 GPU
+      kx-sharded 56.6 ms/step → **0.74×** (0.79× with
+      imex_matmul_chunk=0 — chunked lax.map is only a minor factor).
+      GSPMD's FFT-phase collectives/resharding eat the win. NEXT: profile
+      one sharded step, then `with_sharding_constraint` two-phase layout
+      (kx-sharded vertical/IMEX phase ↔ batch-sharded FFT phase).
+      BONUS FINDING: clean 1-GPU step is 42 ms (~14 min per t.u.) — the M4
+      pilot's 89 ms/step means compute_diagnostics at diag-interval 0.01
+      was ~50% of wall; extension runs use diag-interval 0.05.
 - [ ] Checkpoint path: verify `jax.device_get` on sharded state → io.py npz
       unchanged; restart cross-compatible between 1- and 2-GPU.
 
@@ -154,6 +176,13 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       P0 rearranged to free GPU6: γ=0.005 killed at t≈435, CSV truncated to
       t=400, continuation from `checkpoint_00040000.npz` queued on GPU7
       behind g0.02→g0.08 via a pgrep watcher.
+- [x] **M4 pilot gate PASSED** (2026-07-22): open-top 512²×64 pilot ran
+      t=0→10 clean (linear growth t≲2.5 at ~theory rate → saturation
+      t≈2.7–3 → turbulent; Nu_d≈12, max_w≈220, KE=378 and still
+      condensating). NOTE: open-top Nu_d≈12 at Ra=100 vs ~18–20
+      both-Dirichlet — first quantitative open-top heat-transport number,
+      analyze when extension lands. EXTENSION to t=30 running (GPU6,
+      diag-interval 0.05) for barotropic U_rms saturation → γ-calibration.
 - [ ] dt stability scan at L=48 Lc (start 5e-5; CFL vs dx=0.45 units).
 - [x] Diagnostics cadence + non-finite abort: built into `scripts/run_polar.py`
       (2026-07-22; aborts with exit 2 + emergency checkpoint; structural-NaN
