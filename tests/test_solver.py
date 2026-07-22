@@ -529,7 +529,7 @@ class TestMeanTemperatureDiscretization:
         )
 
         flux_nodal = horizontal_mean_wtheta(
-            state.w_hat, state.th_hat, g.V, g.dirichlet_stencil, g.Nx, g.Npad
+            state.w_hat, state.th_hat, g.V, g.w_stencil, g.dirichlet_stencil, g.Nx, g.Npad
         )
         expected_flux = 0.5 * jnp.sin(np.pi * g.Z) ** 2
         flux_err = float(jnp.max(jnp.abs(flux_nodal - expected_flux)))
@@ -565,10 +565,10 @@ class TestMeanTemperatureDiscretization:
         )
 
         flux_raw = horizontal_mean_wtheta(
-            state.w_hat, state.th_hat, g.V, g.dirichlet_stencil, g.Nx
+            state.w_hat, state.th_hat, g.V, g.w_stencil, g.dirichlet_stencil, g.Nx
         )
         flux_dealiased = horizontal_mean_wtheta(
-            state.w_hat, state.th_hat, g.V, g.dirichlet_stencil, g.Nx, g.Npad
+            state.w_hat, state.th_hat, g.V, g.w_stencil, g.dirichlet_stencil, g.Nx, g.Npad
         )
         expected_flux = 0.5 * jnp.sin(np.pi * g.Z) ** 2
 
@@ -626,7 +626,7 @@ class TestMeanExchangeDiagnostics:
         )
 
         flux_profile = horizontal_mean_wtheta(
-            state.w_hat, state.th_hat, g.V, g.dirichlet_stencil, g.Nx, g.Npad
+            state.w_hat, state.th_hat, g.V, g.w_stencil, g.dirichlet_stencil, g.Nx, g.Npad
         )
         expected_flux = float(jnp.sum(g.cc_weights * flux_profile))
         diag = compute_diagnostics(state, g)

@@ -180,11 +180,11 @@ def _apply_vertical_cutoff(state: State, grid: Grid) -> State:
 
     keep = (jnp.arange(grid.Nz + 1) <= cutoff_n).astype(state.q_hat.real.dtype)
     keep = keep[:, None, None]
-    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.w_stencil)
     th_cheb = _dirichlet_to_cheb(state.th_hat, grid.dirichlet_stencil)
-    w_cheb = project_dirichlet(w_cheb * keep, grid.proj_dirichlet)
+    w_cheb = project_dirichlet(w_cheb * keep, grid.proj_w)
     th_cheb = project_dirichlet(th_cheb * keep, grid.proj_dirichlet)
-    w_hat = _cheb_to_dirichlet(w_cheb, grid.dirichlet_pinv)
+    w_hat = _cheb_to_dirichlet(w_cheb, grid.w_pinv)
     th_hat = _cheb_to_dirichlet(th_cheb, grid.dirichlet_pinv)
     return State(state.q_hat, w_hat, th_hat, state.th_bar)
 
@@ -200,15 +200,16 @@ def mean_temperature_total(th_bar: jnp.ndarray, Z: jnp.ndarray,
 
 
 def horizontal_mean_wtheta(w_hat: jnp.ndarray, th_hat: jnp.ndarray,
-                           V: jnp.ndarray, stencil: jnp.ndarray,
+                           V: jnp.ndarray, w_stencil: jnp.ndarray,
+                           th_stencil: jnp.ndarray,
                            Nx: int, Npad: int | None = None) -> jnp.ndarray:
     """Compute <w theta>_xy as a function of Z at CGL nodes.
 
     Inputs are Chebyshev coefficients; converts to nodal, then to physical
     space for the product, averages horizontally. Returns nodal values (Nz+1,).
     """
-    w_nodal = _to_nodal(_dirichlet_to_cheb(w_hat, stencil), V)
-    th_nodal = _to_nodal(_dirichlet_to_cheb(th_hat, stencil), V)
+    w_nodal = _to_nodal(_dirichlet_to_cheb(w_hat, w_stencil), V)
+    th_nodal = _to_nodal(_dirichlet_to_cheb(th_hat, th_stencil), V)
 
     if Npad is None or Npad == Nx:
         w_phys = jnp.fft.irfft2(w_nodal, s=(Nx, Nx))
@@ -244,7 +245,7 @@ def horizontal_mean_from_nodal_spectral(w_nodal: jnp.ndarray, th_nodal: jnp.ndar
 
 def thermal_exchange_workgrid_fields(state: State, grid: Grid) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Coral-style work-grid reconstructions for the thermal exchange pair."""
-    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.w_stencil)
     th_cheb = _dirichlet_to_cheb(state.th_hat, grid.dirichlet_stencil)
     w_work = _to_nodal(w_cheb, grid.V_exchange)
     th_work = _to_nodal(th_cheb, grid.V_exchange)
@@ -342,7 +343,7 @@ def paired_mean_flux_exchange_rhs(flux_work: jnp.ndarray, grid: Grid) -> jnp.nda
 
 def sbp2_exchange_state_fields(state: State, grid: Grid) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Current-state thermal fields on the uniform SBP work grid."""
-    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.w_stencil)
     th_cheb = _dirichlet_to_cheb(state.th_hat, grid.dirichlet_stencil)
     w_cgl = _to_nodal(w_cheb, grid.V)
     th_cgl = _to_nodal(th_cheb, grid.V)
@@ -473,7 +474,8 @@ def _explicit_rhs_vertical_dealiased(state: State, grid: Grid) -> State:
             th_rhs_cheb = project_dirichlet(-Ath - product_coeffs, grid.proj_dirichlet)
             E_th = _cheb_to_dirichlet(th_rhs_cheb, grid.dirichlet_pinv)
             flux_nodal = horizontal_mean_wtheta(
-                w_hat, th_hat, grid.V_dealias, grid.dirichlet_stencil, grid.Nx, grid.Npad
+                w_hat, th_hat, grid.V_dealias, grid.w_stencil, grid.dirichlet_stencil,
+                grid.Nx, grid.Npad
             )
             flux_hi = _to_coeffs_1d(flux_nodal, grid.V_dealias_inv)
             flux_coeffs = _truncate_cheb_coeffs(flux_hi, grid.Nz)
@@ -561,7 +563,8 @@ def explicit_rhs(state: State, grid: Grid) -> State:
             E_th = _cheb_to_dirichlet(th_rhs_cheb, grid.dirichlet_pinv)
             # Mean temperature tendency: -eps^2 * d<wθ>/dZ
             flux_nodal = horizontal_mean_wtheta(
-                w_hat, th_hat, grid.V, grid.dirichlet_stencil, grid.Nx, grid.Npad
+                w_hat, th_hat, grid.V, grid.w_stencil, grid.dirichlet_stencil,
+                grid.Nx, grid.Npad
             )
             flux_coeffs = _to_coeffs_1d(flux_nodal, grid.V_inv)
             E_th_bar = grid.mean_temp_eps_sq * mean_flux_exchange_rhs_coeffs(flux_coeffs, grid)

@@ -68,9 +68,15 @@ class TestStencilAlgebra:
         assert np.array_equal(np.array(g.proj_w), np.array(g.proj_dirichlet))
         assert g.map_w_to_th is None and g.map_th_to_w is None
 
-    def test_evolve_mean_rejected_for_now(self):
-        with pytest.raises(NotImplementedError, match="fixed_conduction"):
-            make_grid(_cfg(w_bc_top='neumann', thermal_closure='evolve_mean'))
+    def test_evolve_mean_now_permitted(self):
+        """M2b lifted the guard: neumann top + evolve_mean builds a grid.
+
+        (Was test_evolve_mean_rejected_for_now; behavior gates live in
+        tests/test_mixed_bc_plumbing.py.)
+        """
+        g = make_grid(_cfg(w_bc_top='neumann', thermal_closure='evolve_mean'))
+        assert g.w_bc_top == 'neumann'
+        assert g.map_w_to_th is not None and g.map_th_to_w is not None
 
 
 class TestMixedBCDynamics:

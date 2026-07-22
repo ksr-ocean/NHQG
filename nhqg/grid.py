@@ -529,14 +529,6 @@ def make_grid(cfg: NHQGConfig) -> Grid:
         map_th_to_w_np = None
         buoyancy_K_np = None
     elif cfg.w_bc_top == "neumann":
-        if cfg.thermal_closure != "fixed_conduction":
-            raise NotImplementedError(
-                "w_bc_top='neumann' currently requires "
-                "thermal_closure='fixed_conduction': the evolve_mean exchange "
-                "paths still lift w through the Dirichlet stencil (M2b plumbing).")
-        if cfg.vertical_cutoff_n is not None:
-            raise NotImplementedError(
-                "w_bc_top='neumann' with vertical_cutoff_n is not wired up.")
         w_stencil_np = _mixed_bd_tn_stencil(N, dtype=build_dtype)
         w_pinv_np = np.zeros((N - 1, N + 1), dtype=build_dtype)
         w_pinv_np[:, :N - 1] = np.linalg.inv(w_stencil_np[:N - 1, :])

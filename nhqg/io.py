@@ -44,7 +44,7 @@ def save_snapshot(state: State, t: float, step: int,
 
     # Physical-space fields (coefficient space -> nodal -> physical)
     q_phys = _to_physical(state.q_hat, grid.V, Nx)
-    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.w_stencil)
     th_cheb = _dirichlet_to_cheb(state.th_hat, grid.dirichlet_stencil)
     w_phys = _to_physical(w_cheb, grid.V, Nx)
     th_phys = _to_physical(th_cheb, grid.V, Nx)

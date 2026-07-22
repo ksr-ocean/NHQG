@@ -144,7 +144,7 @@ def _quadratic_shell_tendency(field_nodal: jnp.ndarray,
 
 def _theta_mean_feedback_cheb(state: State, grid: Grid) -> jnp.ndarray:
     """Theta explicit source from the evolving mean-temperature gradient."""
-    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.w_stencil)
     zeros = jnp.zeros_like(w_cheb)
     if grid.thermal_closure != "evolve_mean":
         return zeros
@@ -212,11 +212,13 @@ def _solver_mean_flux_profile_nodal(state: State, grid: Grid) -> jnp.ndarray:
         return _to_nodal_1d(flux_coeffs, grid.V)
     if grid.vertical_dealiasing == "none":
         return horizontal_mean_wtheta(
-            state.w_hat, state.th_hat, grid.V, grid.dirichlet_stencil, grid.Nx, grid.Npad
+            state.w_hat, state.th_hat, grid.V, grid.w_stencil, grid.dirichlet_stencil,
+            grid.Nx, grid.Npad
         )
     if grid.vertical_dealiasing in {"cheb_3o2", "cheb_2x"}:
         flux_nodal_hi = horizontal_mean_wtheta(
-            state.w_hat, state.th_hat, grid.V_dealias, grid.dirichlet_stencil, grid.Nx, grid.Npad
+            state.w_hat, state.th_hat, grid.V_dealias, grid.w_stencil,
+            grid.dirichlet_stencil, grid.Nx, grid.Npad
         )
         flux_coeffs_hi = _to_coeffs_1d(flux_nodal_hi, grid.V_dealias_inv)
         flux_coeffs = _truncate_cheb_coeffs(flux_coeffs_hi, grid.Nz)
@@ -248,7 +250,7 @@ def _dealiased_shell_flux_profiles(w_nodal: jnp.ndarray,
     if uses_coral_exchange_workgrid(grid):
         if state is None:
             raise ValueError("state is required for Coral work-grid shell flux profiles")
-        w_cheb = _dirichlet_to_cheb(state.w_hat, grid.dirichlet_stencil)
+        w_cheb = _dirichlet_to_cheb(state.w_hat, grid.w_stencil)
         th_cheb = _dirichlet_to_cheb(state.th_hat, grid.dirichlet_stencil)
         w_work = _to_nodal(w_cheb, grid.V_exchange)
         th_work = _to_nodal(th_cheb, grid.V_exchange)
@@ -292,7 +294,7 @@ def compute_dealiased_thermal_shell_budgets(state: State, grid: Grid,
     w_buoyancy_shell = grid.Ra_sigma * heat_flux_shell
     if uses_paired_mean_exchange(grid):
         k_mag, dk, k_bins = _shell_bins(grid.ksq, float(grid.L))
-        w_cheb = _dirichlet_to_cheb(state.w_hat, grid.dirichlet_stencil)
+        w_cheb = _dirichlet_to_cheb(state.w_hat, grid.w_stencil)
         w_work, _, dth_bar_dZ_work = thermal_exchange_workgrid_fields(state, grid)
         th_mean_feedback_entries = []
         for i in range(k_bins.shape[0]):
@@ -495,22 +497,22 @@ def compute_w_theta_budgets(state: State, grid: Grid) -> dict:
     explicit = explicit_rhs_dispatch(state, grid)
     implicit = implicit_tendency(state, grid)
 
-    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.w_stencil)
     th_cheb = _dirichlet_to_cheb(state.th_hat, grid.dirichlet_stencil)
     w_nodal = _to_nodal(w_cheb, grid.V)
     th_nodal = _to_nodal(th_cheb, grid.V)
 
-    w_nonlinear_cheb = _dirichlet_to_cheb(explicit.w_hat, grid.dirichlet_stencil)
+    w_nonlinear_cheb = _dirichlet_to_cheb(explicit.w_hat, grid.w_stencil)
 
     dq_dZ = jnp.einsum('ij,j...->i...', grid.G_Z, state.q_hat)
     w_q_coupling_cheb = project_dirichlet(
-        grid.inv_denom[None, :, :] * dq_dZ, grid.proj_dirichlet
+        grid.inv_denom[None, :, :] * dq_dZ, grid.proj_w
     )
     w_buoyancy_cheb = project_dirichlet(
-        grid.Ra_sigma * th_cheb, grid.proj_dirichlet
+        grid.Ra_sigma * th_cheb, grid.proj_w
     )
     w_diss_cheb = _dirichlet_to_cheb(
-        -grid.diss_rate_w[None, :, :] * state.w_hat, grid.dirichlet_stencil
+        -grid.diss_rate_w[None, :, :] * state.w_hat, grid.w_stencil
     )
 
     th_explicit_total_cheb = _dirichlet_to_cheb(explicit.th_hat, grid.dirichlet_stencil)
@@ -602,7 +604,7 @@ def compute_diagnostics(state: State, grid: Grid) -> dict:
     psi_hat = invert_psi(state.q_hat, grid.inv_denom)
     psi_nodal = _to_nodal(psi_hat, grid.V)
     q_nodal = _to_nodal(state.q_hat, grid.V)
-    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.dirichlet_stencil)
+    w_cheb = _dirichlet_to_cheb(state.w_hat, grid.w_stencil)
     th_cheb = _dirichlet_to_cheb(state.th_hat, grid.dirichlet_stencil)
     w_nodal = _to_nodal(w_cheb, grid.V)
     th_nodal = _to_nodal(th_cheb, grid.V)
