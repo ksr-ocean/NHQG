@@ -181,8 +181,17 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       t≈2.7–3 → turbulent; Nu_d≈12, max_w≈220, KE=378 and still
       condensating). NOTE: open-top Nu_d≈12 at Ra=100 vs ~18–20
       both-Dirichlet — first quantitative open-top heat-transport number,
-      analyze when extension lands. EXTENSION to t=30 running (GPU6,
-      diag-interval 0.05) for barotropic U_rms saturation → γ-calibration.
+      analyze when extension lands. EXTENSION superseded (2026-07-22, user
+      direction): pilot now runs **to t=100** on GPU6, then a handover
+      script auto-calibrates γ from the final-40-unit U_bt (target
+      L_γ = 6 Lc; plateau U_bt ≈ 15–16 at t≈10–15 ⇒ γ ≈ 6e-4 expected) and
+      launches **P2** — the first convective trap run — from the t=100
+      checkpoint to t=250:
+      `output/polar_p2_opentop_trap_gcalib_Nx512_Nz64_L48` (handover
+      `p2_handover.py` in the session scratchpad; calibration line logged
+      in the P2 log). Edge-wave check: γ~6e-4 ⇒ ω_edge ≈ 0.2 → ars222 safe.
+      ~23 h (pilot) + ~43 h (P2). γ=0 movie:
+      `analysis/m4_pilot_opentop_3x3.mp4` (regenerate after t=100).
 - [ ] dt stability scan at L=48 Lc (start 5e-5; CFL vs dx=0.45 units).
 - [x] Diagnostics cadence + non-finite abort: built into `scripts/run_polar.py`
       (2026-07-22; aborts with exit 2 + emergency checkpoint; structural-NaN
