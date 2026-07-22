@@ -57,8 +57,9 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       guard + exclusivity raise; production-flavor 23_rule trap run finite &
       band-limited. Suite: 106 passed.
 - [ ] **M1 gate (P0 validation)**: quasi-barotropic crystal forms; radius
-      tracks L_γ=(U/γ)^{1/3} across ≥3 γ values. [GPU 6/7, lead] — needs a
-      polar driver script (γ-calibration + random-vorticity init variant).
+      tracks L_γ=(U/γ)^{1/3} across ≥3 γ values. [GPU 6/7, lead]
+      Driver ready: `scripts/run_polar.py --init barotropic-vorticity --Ra 0`
+      (2026-07-22, codex, `f437827`); analysis via `nhqg/polar_diagnostics.py`.
 
 ## M2 — Mixed BCs: Dirichlet bottom / Neumann-w top [independent of M1]
 
@@ -74,8 +75,10 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       `io.py` / `diagnostics.py` w lifts → `w_stencil`; then LIFT the
       restriction (currently `w_bc_top='neumann'` requires
       `fixed_conduction` and no `vertical_cutoff_n` — enforced in make_grid).
-- [ ] 1-D generalized EVP onset solver in Z per k (lead; CPU); tabulate
-      mixed-BC Ra_c(k), k_c; gate solver growth rates within 1% at 3 k's.
+- [x] EVP onset gate (2026-07-22, `f437827`, lead): `nhqg/linear_onset.py`
+      assembles the exact linear operator of the discretized solver per k;
+      validated vs closed-form both-Dirichlet dispersion (1e-8) and
+      Ra_c=8.6956; **mixed-BC stepper growth within 1% of EVP at 3 k's** ✓.
 - [ ] Route-B cross-check: same mixed-BC case in `fd_vertical_benchmark`
       (sbp42) at 128×128; compare onset + short nonlinear stats. [GPU, lead]
 
@@ -92,8 +95,9 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
 ## M4 — 512²×64 shakedown
 
 - [ ] dt stability scan at L=48 Lc (start 5e-5; CFL vs dx=0.45 units).
-- [ ] Diagnostics cadence + non-finite abort in driver (May-19 drivers don't
-      stop on non-finite — fix in the polar driver).
+- [x] Diagnostics cadence + non-finite abort: built into `scripts/run_polar.py`
+      (2026-07-22; aborts with exit 2 + emergency checkpoint; structural-NaN
+      SBP audit fields excluded by name so real blowups still trigger).
 - [x] Polar diagnostics module (2026-07-22, `0006e75`, Sonnet subagent vs
       lead-written gates): `nhqg/polar_diagnostics.py` — azimuthal E(m),
       vortex tracker (periodic NMS + subpixel), radial profiles, trap mask.
