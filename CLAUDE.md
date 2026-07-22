@@ -34,6 +34,10 @@ This repository contains a **Nonhydrostatic Quasi-Geostrophic Equation (NHQGE) s
   **efficiency_review.md**: per-step cost audit (items #1/#3 since
   implemented; `23_rule` since adopted).
 
+- **sharding_implementation.md** (2026-07-22): teaching notes on the M3
+  2-GPU sharding — GSPMD mental model, how the layout flows through the
+  step, why kx is the only shardable axis, CPU-vs-GPU gate split.
+
 - **fd_vertical_benchmark/**: separate FD-vertical solver package (SBP42 /
   compact4, uniform or tanh grid) targeting the future mixed-BC goal
   (Neumann-w top / Dirichlet bottom via SBP-SAT). Own README.
