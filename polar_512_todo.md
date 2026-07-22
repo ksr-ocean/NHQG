@@ -92,11 +92,29 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       this). Driver now has --inject-* (Gaussian cyclones, k=0 absorbed).
       Injection pilot (γ=0.02, A=6, r=2.4, 1/t.u., drag 0.02, t=100):
       equilibrium KE≈4.9 (U≈3.1), discrete persistent storms ✓.
-      **FORCED campaign P0F running** (GPU7, detached): γ=0.005 → γ=0.02,
-      t=600 each, ~1.8 h each; γ=0.08 leg deferred to a scheme/dt decision
-      (rk443 ~10 h vs ars222@dt/4 ~7 h) after the first two report.
-      Decaying-run data (rings/zonation) retained — publishable contrast
-      case for the regime diagram. **Analysis tooling ready** (2026-07-22, codex #2,
+      **FORCED campaign P0F**: completed t=600 both γ — result: lone polar
+      cyclone + trap-edge ring, NOT crystals (γ=0.005 briefly held 2 polar
+      cyclones). Iteration pilots: 5× rate → CFL blowup at t=67 (KE eq.
+      ~10× ⇒ dt must follow U) AND soup (ambient U≈8 shreds ζ=6 storms);
+      bracketing pilots (2.5×rate/drag.02, base/drag.005, dt=5e-3) clean to
+      t=300 but same lone-cyclone morphology.
+      **ROOT CAUSE FOUND (2026-07-22, lit check)**: SYI22 crystals come
+      from DECAYING evolution of a **monoscale cap-confined** init with
+      scale hierarchy L_i « L_γ ≈ r*/5 (CIL24, arXiv:2403.00870: λ_i
+      210–700 km vs L_γ~10⁴ km vs cap 5×10⁴ km; ±5% ring spectrum,
+      geostrophically balanced, sponge outside cap). ALL our attempts had
+      L_i ~ L_γ — no room for the inverse cascade before γ-arrest → the
+      jets/lone-cyclone corner. Also per CIL24: crystals need small dh/h —
+      the QG L_d=∞ limit (OUR model) is the crystal-friendly regime; and
+      "no simulation has produced steady packed vortices under
+      forced-dissipative convective conditions" (open problem = our P2).
+      **P0c sweep RUNNING** (GPU7, detached, ~7–9 h): 1024²×8, L=24Lc,
+      λ_i=0.5 (k_i=12.57±5%), confined to r*=26, ζ_rms=8.8 (U≈0.7),
+      ν₄=5e-10 (rescaled for k_max=18.5!), dt=5e-3, t=400, decaying,
+      γ ∈ {1.25e-3, 5e-3, 2e-2} → L_γ ∈ {8.2, 5.2, 3.3}, r*/L_γ ∈
+      {3.2, 5, 8}. ars222 safe (ω_edge·dt ≈ 0.026 at worst γ).
+      Driver: `--init-confine-radius` (`38366a5`).
+      Forced-run data retained as regime-diagram contrast cases. **Analysis tooling ready** (2026-07-22, codex #2,
       verified): `scripts/analyze_polar_p0.py` — crystal_metrics (R_crystal,
       NN spacing via periodic min-image), per-run overlays, log-log slope
       fits vs L_γ; gate = synthetic 19-vortex lattice with exact R/spacing
