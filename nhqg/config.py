@@ -20,7 +20,11 @@ class NHQGConfig:
     # --- Physical parameters ---
     Ra_tilde: float = 100.0   # Reduced Rayleigh number
     sigma: float = 1.0        # Prandtl number
-    beta: float = 0.0         # PV gradient
+    beta: float = 0.0         # PV gradient (flat beta-plane); exclusive with gamma
+    gamma: float = 0.0        # Polar PV curvature gamma = f_p/a_p^2 (SYI22 trap);
+                              # activates the trapped background PV eta(x,y)
+    trap_r_star: float | None = None  # Trap radius in code units; None -> 0.45*(L/2)
+    trap_sharpness: float = 20.0      # Trap tanh sharpness A_d (SYI22 used |A_d| = 20)
     Ld: float = float('inf')  # Deformation radius (inf = barotropic limit)
     L: float = 20.0           # Horizontal domain size (in units of Lc)
     thermal_closure: str = "fixed_conduction"  # or "evolve_mean"

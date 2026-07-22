@@ -36,16 +36,29 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
 
 ## M1 — Trap (γ-effect) [independent of M2]
 
-- [ ] Config params: `gamma`, `trap_r_star`, `trap_sharpness`, sponge trio
-      (default off); assert gamma/beta mutually exclusive. (codex-able)
-- [ ] `grid.py`: η̂ precompute (unpadded grid, 2/3-masked), smoothness assert
-      (out-of-band energy < 1e-12).
-- [ ] `solver.py`: augmented advection `q̂+η̂` in BOTH `jacobian` and `flux`
-      paths; β spectral term untouched for the beta path.
-- [ ] Tests: η↔β equivalence to roundoff; conservation/antisymmetry with η;
-      γ=0 invisibility. (codex-able against lead-written spec)
+- [x] Config params (2026-07-22): `gamma`, `trap_r_star` (None → 0.45·L/2),
+      `trap_sharpness` (A_d=20); gamma/beta exclusivity enforced in make_grid.
+      Sponge NOT implemented (deferred — SYI22 didn't need one; add only if
+      P0/P2 show boundary wave reflection).
+- [x] `grid.py` (2026-07-22): η̂ precompute + **resolution guard** (raises if
+      >1e-10 of η's spectral energy is outside the 2/3 band; message reports
+      tanh width vs dx). Trap-geometry feasibility learned the hard way: need
+      transition width ≳ 4 dx AND edge margin (L/2−r*) ≳ 7 widths — at
+      production (512², L=48Lc, A_d=20) both hold with orders of margin.
+- [x] `solver.py` (2026-07-22): advected PV is `q_nodal + η̂` in both RHS
+      variants (covers jacobian AND flux paths — one augmentation point);
+      β spectral term untouched.
+- [x] Tests (9, `tests/test_polar.py`): η matches analytic formula; added
+      tendency == −J(ψ,η) vs the independently validated single-level
+      Jacobian to 1e-12 (stronger than the η↔β idea, which is unrepresentable
+      periodically); w/θ/Θ̄ tendencies bitwise untouched; flux ≡ jacobian on
+      the η term to 1e-12 on the Nyquist-free subspace (Nyquist self-aliasing
+      lands differently in the two forms — 32_rule fine print, documented);
+      guard + exclusivity raise; production-flavor 23_rule trap run finite &
+      band-limited. Suite: 106 passed.
 - [ ] **M1 gate (P0 validation)**: quasi-barotropic crystal forms; radius
-      tracks L_γ=(U/γ)^{1/3} across ≥3 γ values. [GPU, lead]
+      tracks L_γ=(U/γ)^{1/3} across ≥3 γ values. [GPU 6/7, lead] — needs a
+      polar driver script (γ-calibration + random-vorticity init variant).
 
 ## M2 — Mixed BCs: Dirichlet bottom / Neumann-w top [independent of M1]
 

@@ -92,6 +92,10 @@ class Grid(NamedTuple):
 
     # Scalar parameters (as 0-d arrays for JIT compatibility)
     beta: jnp.ndarray
+    eta_hat: jnp.ndarray | None  # (Nx, Nk) rfft2 of the trapped polar background PV
+                                 # eta(x,y) = -gamma*r^2/2 * sigma_trap(r); None when gamma=0.
+                                 # Z-independent (planetary PV is barotropic); 2/3-masked
+                                 # under 23_rule to match the state band limit.
     Ra_sigma: jnp.ndarray
     sigma: jnp.ndarray
     L: jnp.ndarray
@@ -523,6 +527,34 @@ def make_grid(cfg: NHQGConfig) -> Grid:
     mask_23_np = ((np.abs(_kx_int)[:, None] <= K_23) &
                   (_ky_int[None, :] <= K_23)).astype(np.float64)
 
+    # ── Trapped polar background PV (SYI22 gamma-effect; NHGQ_polar.tex) ──
+    if cfg.gamma != 0.0 and cfg.beta != 0.0:
+        raise ValueError(
+            "gamma (polar trap) and beta (flat beta-plane) are mutually exclusive")
+    eta_hat_np = None
+    if cfg.gamma != 0.0:
+        r_star = cfg.trap_r_star if cfg.trap_r_star is not None else 0.45 * (L / 2.0)
+        xy = np.arange(Nx) * (L / Nx)
+        X, Y = np.meshgrid(xy, xy, indexing='ij')
+        r = np.sqrt((X - L / 2.0) ** 2 + (Y - L / 2.0) ** 2)
+        sigma_trap = 0.5 * (1.0 - np.tanh(cfg.trap_sharpness * (r - r_star) / r_star))
+        eta_phys = -0.5 * cfg.gamma * r ** 2 * sigma_trap
+        eta_hat_np = np.fft.rfft2(eta_phys)
+        # Resolution guard: eta must be band-limited well inside the 2/3 band
+        # (its gradients drive the gamma-effect; a trap edge sharper than the
+        # grid silently corrupts the PV advection). rfft2 double-counts no
+        # modes for this relative measure.
+        e_tot = np.sum(np.abs(eta_hat_np) ** 2)
+        e_out = np.sum(np.abs(eta_hat_np * (1.0 - mask_23_np)) ** 2)
+        if e_out > 1e-10 * e_tot:
+            raise ValueError(
+                f"Trap background PV is under-resolved: {e_out / e_tot:.2e} of its "
+                f"spectral energy lies outside the 2/3 band (tolerance 1e-10). "
+                f"Decrease trap_sharpness (tanh width r_star/A_d = "
+                f"{r_star / cfg.trap_sharpness:.3g} vs dx = {L / Nx:.3g}) or increase Nx.")
+        if cfg.horizontal_dealiasing == "23_rule":
+            eta_hat_np = eta_hat_np * mask_23_np
+
     # ── Dissipation rates and IMEX alpha factors ──
     p = cfg.hyper_order
     if cfg.imex_scheme == "ars222":
@@ -606,6 +638,8 @@ def make_grid(cfg: NHQGConfig) -> Grid:
         proj_dirichlet=to_jax(proj_dir_np),
         proj_neumann=to_jax(proj_neu_np),
         beta=to_jax(np.array(cfg.beta)),
+        eta_hat=(jnp.array(eta_hat_np, dtype=cfg.complex_dtype)
+                 if eta_hat_np is not None else None),
         Ra_sigma=to_jax(np.array(cfg.Ra_tilde / cfg.sigma)),
         sigma=to_jax(np.array(cfg.sigma)),
         L=to_jax(np.array(L)),

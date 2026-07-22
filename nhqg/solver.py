@@ -427,7 +427,11 @@ def _explicit_rhs_vertical_dealiased(state: State, grid: Grid) -> State:
     w_nodal = _to_nodal(w_cheb, grid.V_dealias)
     th_nodal = _to_nodal(th_cheb, grid.V_dealias)
 
-    Aq_n, Aw_n, Ath_n = _triple_horizontal_advection(psi_nodal, q_nodal, w_nodal, th_nodal, grid)
+    # Polar trap: advect the total PV q' + eta (Z-independent; see explicit_rhs)
+    q_adv_nodal = (q_nodal if grid.eta_hat is None
+                   else q_nodal + grid.eta_hat[None, :, :])
+
+    Aq_n, Aw_n, Ath_n = _triple_horizontal_advection(psi_nodal, q_adv_nodal, w_nodal, th_nodal, grid)
 
     Aq_hi = _to_coeffs(Aq_n, grid.V_dealias_inv)
     Aw_hi = _to_coeffs(Aw_n, grid.V_dealias_inv)
@@ -506,8 +510,14 @@ def explicit_rhs(state: State, grid: Grid) -> State:
     w_nodal = _to_nodal(w_cheb, grid.V)
     th_nodal = _to_nodal(th_cheb, grid.V)
 
+    # Polar trap: advect the total PV q' + eta (NHGQ_polar.tex Approach A).
+    # eta is Z-independent; in flux form div(u*(q+eta)) = J(psi,q) + J(psi,eta)
+    # exactly since div u = 0, so the same augmentation serves both paths.
+    q_adv_nodal = (q_nodal if grid.eta_hat is None
+                   else q_nodal + grid.eta_hat[None, :, :])
+
     # Fused horizontal advection (operates on nodal values at each Z level)
-    Aq_n, Aw_n, Ath_n = _triple_horizontal_advection(psi_nodal, q_nodal, w_nodal, th_nodal, grid)
+    Aq_n, Aw_n, Ath_n = _triple_horizontal_advection(psi_nodal, q_adv_nodal, w_nodal, th_nodal, grid)
 
     # Convert advection results back to Chebyshev coefficients
     Aq = _to_coeffs(Aq_n, grid.V_inv)
