@@ -62,19 +62,20 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
 
 ## M2 — Mixed BCs: Dirichlet bottom / Neumann-w top [independent of M1]
 
-- [ ] `grid.py`: per-field stencils — w: Shen 3-term (φ(0)=0, φ′(1)=0) with
-      exact triangular left inverse (NO Moore–Penrose — see 2026-03 lesson);
-      θ keeps Dirichlet stencil. Both-Dirichlet special case must reproduce
-      current operators bitwise.
-- [ ] `_build_imex_inv`: K-matrix buoyancy elimination
-      (A′ = α_w I − (γdt)²c(k)B − (γdt)²(Ra/σ)/α_θ(k)·K, K precomputed).
-- [ ] `solver.py`/`io.py`/`diagnostics.py`: replace shared dirichlet_stencil/
-      pinv with per-field operators everywhere (exchange path lifts w through
-      w_stencil). (bulk codex-able after lead does grid.py + IMEX)
-- [ ] 1-D generalized EVP onset solver in Z per k (lead; ~30 lines, CPU);
-      tabulate mixed-BC Ra_c(k), k_c.
-- [ ] Tests: BC exactness 1e-12 (w′(top), w(bottom)); bitwise both-Dirichlet
-      regression; IMEX vs RK4; **onset growth rates within 1% of EVP at 3 k's**.
+- [x] **M2 core** (2026-07-22, `88cf8f9`, lead): `w_bc_top` config; Shen mixed
+      stencil (b_n = −(n²+(n+1)²)/((n+1)²+(n+2)²), a_n = 1+b_n) with exact
+      triangular left inverse; K-matrix buoyancy elimination (shell dedup
+      survives); all solver physics sites (both RHS variants, implicit
+      tendency, IMEX steps 0/2/4/5 with w↔θ basis maps, RK4/_apply_bcs) on
+      per-field operators. Both-Dirichlet path shares the same arrays and
+      expressions (bitwise). 13 tests incl. open-top vs rigid-lid control and
+      mixed IMEX-vs-RK4.
+- [ ] **M2b plumbing** (codex-able, lead-written gates): exchange paths /
+      `io.py` / `diagnostics.py` w lifts → `w_stencil`; then LIFT the
+      restriction (currently `w_bc_top='neumann'` requires
+      `fixed_conduction` and no `vertical_cutoff_n` — enforced in make_grid).
+- [ ] 1-D generalized EVP onset solver in Z per k (lead; CPU); tabulate
+      mixed-BC Ra_c(k), k_c; gate solver growth rates within 1% at 3 k's.
 - [ ] Route-B cross-check: same mixed-BC case in `fd_vertical_benchmark`
       (sbp42) at 128×128; compare onset + short nonlinear stats. [GPU, lead]
 
@@ -93,8 +94,9 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
 - [ ] dt stability scan at L=48 Lc (start 5e-5; CFL vs dx=0.45 units).
 - [ ] Diagnostics cadence + non-finite abort in driver (May-19 drivers don't
       stop on non-finite — fix in the polar driver).
-- [ ] Polar diagnostics: azimuthal E(m), vortex tracker, trap-restricted
-      spectra (`NHGQ_polar.tex` §7).
+- [x] Polar diagnostics module (2026-07-22, `0006e75`, Sonnet subagent vs
+      lead-written gates): `nhqg/polar_diagnostics.py` — azimuthal E(m),
+      vortex tracker (periodic NMS + subpixel), radial profiles, trap mask.
 - [ ] Vertical-tail monitor (q Chebyshev tail fraction) in run diagnostics.
 - [ ] **Gate**: stable 10-unit pilot, ghost-free, VRAM within budget.
 
