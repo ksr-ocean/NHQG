@@ -67,7 +67,40 @@ def _parse_args():
     parser.add_argument("--checkpoint-interval", type=float, default=1.0)
     parser.add_argument("--diag-interval", type=float, default=0.05)
     parser.add_argument("--restart-checkpoint", type=str, default=None)
+    parser.add_argument("--inject-interval", type=float, default=0.0,
+                        help="SYI22-style stochastic forcing: time between cyclone "
+                             "injections (0 = decaying, no forcing)")
+    parser.add_argument("--inject-amplitude", type=float, default=8.0,
+                        help="peak vorticity of each injected cyclone")
+    parser.add_argument("--inject-radius", type=float, default=2.4,
+                        help="Gaussian radius of injected cyclones (~Lc/2)")
+    parser.add_argument("--inject-count", type=int, default=1,
+                        help="cyclones injected per event")
     return parser.parse_args()
+
+
+def _inject_cyclones(state, grid, args, L, rng):
+    """Add Gaussian cyclones to the barotropic PV at random positions.
+
+    Injection is host-side numpy on the T_0 Chebyshev coefficient (the
+    barotropic component; T_0 = 1). The 2/3 mask is applied to keep the
+    state band-limited; the k=0 net circulation is removed by the solver's
+    existing k=0 projection (gamma-plane absorbs it, as in SYI22).
+    """
+    Nx = args.Nx
+    x = np.arange(Nx) * L / Nx
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    patch = np.zeros((Nx, Nx))
+    for _ in range(args.inject_count):
+        x0, y0 = rng.uniform(0.0, L, size=2)
+        dx = (X - x0 + L / 2.0) % L - L / 2.0
+        dy = (Y - y0 + L / 2.0) % L - L / 2.0
+        patch += args.inject_amplitude * np.exp(
+            -(dx ** 2 + dy ** 2) / (2.0 * args.inject_radius ** 2))
+    patch_hat = np.fft.rfft2(patch)   # same layout convention as the vorticity init
+    q_hat = np.array(state.q_hat)
+    q_hat[0] += patch_hat * np.array(grid.mask_23)
+    return State(jnp.asarray(q_hat), state.w_hat, state.th_hat, state.th_bar)
 
 
 def _make_barotropic_vorticity_state(args, grid, L):
@@ -243,6 +276,9 @@ def main():
 
         return jax.lax.scan(scan_body, current_state, xs=None, length=n_steps)[0]
 
+    inject_rng = np.random.default_rng(args.seed + 987654321)
+    next_inject = (t0 + args.inject_interval) if args.inject_interval > 0 else None
+
     step = step0
     last_diag = None
     while step < n_total:
@@ -251,6 +287,10 @@ def main():
         jax.block_until_ready(state.q_hat)
         step += n_steps
         t = t0 + (step - step0) * args.dt
+
+        while next_inject is not None and t + 1e-12 >= next_inject:
+            state = _inject_cyclones(state, grid, args, L, inject_rng)
+            next_inject += args.inject_interval
 
         diag = _scalar_diagnostics(compute_diagnostics(state, grid), args.thermal_closure)
         _write_diagnostics_row(diagnostics_path, step, t, diag)
