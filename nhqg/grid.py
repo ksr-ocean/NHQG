@@ -105,6 +105,12 @@ class Grid(NamedTuple):
                                  # eta(x,y) = -gamma*r^2/2 * sigma_trap(r); None when gamma=0.
                                  # Z-independent (planetary PV is barotropic); 2/3-masked
                                  # under 23_rule to match the state band limit.
+    sponge_phys: jnp.ndarray | None  # (Nx, Nx) float, band-limited physical sigma(x,y)
+                                     # on the Nx grid; None when sponge_rate == 0
+    sponge_phys_pad: jnp.ndarray | None  # (Npad, Npad) float, zero-padded-spectrum
+                                         # irfft2 of sigma on the Npad grid, WITHOUT
+                                         # any (Npad/Nx)^2 rescale; None when
+                                         # sponge_rate == 0
     Ra_sigma: jnp.ndarray
     sigma: jnp.ndarray
     L: jnp.ndarray
@@ -624,6 +630,42 @@ def make_grid(cfg: NHQGConfig) -> Grid:
         if cfg.horizontal_dealiasing == "23_rule":
             eta_hat_np = eta_hat_np * mask_23_np
 
+    sponge_phys_np = None
+    sponge_phys_pad_np = None
+    if cfg.sponge_rate < 0.0:
+        raise ValueError("sponge_rate must be >= 0")
+    if cfg.sponge_rate > 0.0:
+        if cfg.sponge_r_start is not None:
+            r_s = cfg.sponge_r_start
+        elif cfg.gamma != 0.0:
+            r_s = 1.18 * r_star
+        else:
+            raise ValueError(
+                "sponge_r_start is required when gamma == 0 "
+                "(no trap radius to derive it from)")
+        xy = np.arange(Nx) * (L / Nx)
+        X, Y = np.meshgrid(xy, xy, indexing='ij')
+        r = np.sqrt((X - L / 2.0) ** 2 + (Y - L / 2.0) ** 2)
+        sigma_phys = cfg.sponge_rate * 0.5 * (
+            1.0 + np.tanh(cfg.sponge_sharpness * (r - r_s) / r_s))
+        sigma_hat = np.fft.rfft2(sigma_phys)
+        s_tot = np.sum(np.abs(sigma_hat) ** 2)
+        s_out = np.sum(np.abs(sigma_hat * (1.0 - mask_23_np)) ** 2)
+        if s_out > 1e-10 * s_tot:
+            raise ValueError(
+                f"Sponge profile is under-resolved: {s_out / s_tot:.2e} of its "
+                f"spectral energy lies outside the 2/3 band (tolerance 1e-10). "
+                f"Decrease sponge_sharpness (tanh width r_s/A_s = "
+                f"{r_s / cfg.sponge_sharpness:.3g} vs dx = {L / Nx:.3g}) or increase Nx.")
+        if cfg.horizontal_dealiasing == "23_rule":
+            sigma_hat = sigma_hat * mask_23_np
+        sponge_phys_np = np.fft.irfft2(sigma_hat, s=(Nx, Nx))
+        Nk_pad = Npad // 2 + 1
+        sigma_hat_pad = np.zeros((Npad, Nk_pad), dtype=np.complex128)
+        sigma_hat_pad[:Nx // 2, :Nk] = sigma_hat[:Nx // 2, :]
+        sigma_hat_pad[Npad - Nx // 2:, :Nk] = sigma_hat[Nx // 2:, :]
+        sponge_phys_pad_np = np.fft.irfft2(sigma_hat_pad, s=(Npad, Npad))
+
     # ── Dissipation rates and IMEX alpha factors ──
     p = cfg.hyper_order
     if cfg.imex_scheme == "ars222":
@@ -714,6 +756,10 @@ def make_grid(cfg: NHQGConfig) -> Grid:
         beta=to_jax(np.array(cfg.beta)),
         eta_hat=(jnp.array(eta_hat_np, dtype=cfg.complex_dtype)
                  if eta_hat_np is not None else None),
+        sponge_phys=(to_jax(sponge_phys_np)
+                     if sponge_phys_np is not None else None),
+        sponge_phys_pad=(to_jax(sponge_phys_pad_np)
+                         if sponge_phys_pad_np is not None else None),
         Ra_sigma=to_jax(np.array(cfg.Ra_tilde / cfg.sigma)),
         sigma=to_jax(np.array(cfg.sigma)),
         L=to_jax(np.array(L)),

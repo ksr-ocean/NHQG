@@ -17,6 +17,8 @@ import jax.numpy as jnp
 from nhqg.grid import Grid
 from nhqg.spectral import (
     _zero_pad,
+    sponge_product_23,
+    sponge_product_32,
     triple_conservative_flux_divergence,
     triple_conservative_flux_divergence_23,
     triple_jacobian,
@@ -416,6 +418,12 @@ def _triple_horizontal_advection(psi_nodal: jnp.ndarray,
     raise ValueError(f"Unsupported nonlinear_advection={grid.nonlinear_advection!r}")
 
 
+def _sponge_tendency(f_hat, grid):
+    if grid.horizontal_dealiasing == "23_rule":
+        return sponge_product_23(f_hat, grid.sponge_phys, grid.mask_23, grid.Nx)
+    return sponge_product_32(f_hat, grid.sponge_phys_pad, grid.Nx, grid.Npad)
+
+
 def _explicit_rhs_vertical_dealiased(state: State, grid: Grid) -> State:
     """Explicit RHS with overresolved vertical collocation and coefficient truncation."""
     q_hat, w_hat, th_hat, th_bar = state
@@ -483,6 +491,14 @@ def _explicit_rhs_vertical_dealiased(state: State, grid: Grid) -> State:
     else:
         E_th = E_th_adv
         E_th_bar = jnp.zeros_like(th_bar)
+
+    if grid.sponge_phys is not None:
+        # sigma is Z-independent: the horizontal product acts per vertical
+        # (Chebyshev/Galerkin) coefficient level exactly in-basis, so no BC
+        # re-projection is needed.
+        E_q = E_q - _sponge_tendency(q_hat, grid)
+        E_w = E_w - _sponge_tendency(w_hat, grid)
+        E_th = E_th - _sponge_tendency(th_hat, grid)
 
     return State(E_q, E_w, E_th, E_th_bar)
 
@@ -571,6 +587,14 @@ def explicit_rhs(state: State, grid: Grid) -> State:
     else:
         E_th = E_th_adv
         E_th_bar = jnp.zeros_like(th_bar)
+
+    if grid.sponge_phys is not None:
+        # sigma is Z-independent: the horizontal product acts per vertical
+        # (Chebyshev/Galerkin) coefficient level exactly in-basis, so no BC
+        # re-projection is needed.
+        E_q = E_q - _sponge_tendency(q_hat, grid)
+        E_w = E_w - _sponge_tendency(w_hat, grid)
+        E_th = E_th - _sponge_tendency(th_hat, grid)
 
     return State(E_q, E_w, E_th, E_th_bar)
 

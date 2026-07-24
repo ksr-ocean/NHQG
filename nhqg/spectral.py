@@ -50,6 +50,30 @@ def _truncate(f_hat_pad: jnp.ndarray, Nx: int, Npad: int) -> jnp.ndarray:
     return result * (Npad / Nx) ** 2
 
 
+@partial(jax.jit, static_argnums=(3,))
+def sponge_product_23(f_hat: jnp.ndarray, sponge_phys: jnp.ndarray,
+                      mask_23: jnp.ndarray, Nx: int) -> jnp.ndarray:
+    """Dealiased product sigma*f under the 2/3 rule: product on the Nx grid,
+    output-masked. f_hat: (Nz_levels, Nx, Nk) complex, one vertical batch axis.
+    """
+    f = jnp.fft.irfft2(f_hat, s=(Nx, Nx))
+    return jnp.fft.rfft2(sponge_phys[None, :, :] * f) * mask_23[None, :, :]
+
+
+@partial(jax.jit, static_argnums=(2, 3))
+def sponge_product_32(f_hat: jnp.ndarray, sponge_phys_pad: jnp.ndarray,
+                      Nx: int, Npad: int) -> jnp.ndarray:
+    """Dealiased product sigma*f under the 3/2 rule: zero-pad f (per level via
+    vmap over the leading axis, mirroring triple_jacobian's batching pattern),
+    multiply by the pre-attenuated padded sigma, truncate back (which applies
+    the (Npad/Nx)^2 factor).
+    """
+    f_pad_hat = jax.vmap(lambda level: _zero_pad(level, Nx, Npad))(f_hat)
+    f_pad = jnp.fft.irfft2(f_pad_hat, s=(Npad, Npad))
+    prod_pad_hat = jnp.fft.rfft2(sponge_phys_pad[None, :, :] * f_pad)
+    return jax.vmap(lambda level: _truncate(level, Nx, Npad))(prod_pad_hat)
+
+
 # ---------------------------------------------------------------------------
 # Single nonlinear evaluations
 # ---------------------------------------------------------------------------

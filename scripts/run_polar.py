@@ -30,6 +30,9 @@ def _parse_args():
     parser.add_argument("--gamma", type=float, default=0.0)
     parser.add_argument("--trap-r-star", type=float, default=None)
     parser.add_argument("--trap-sharpness", type=float, default=20.0)
+    parser.add_argument("--sponge-rate", type=float, default=0.0)
+    parser.add_argument("--sponge-r-start", type=float, default=None)
+    parser.add_argument("--sponge-sharpness", type=float, default=20.0)
     parser.add_argument("--Ra", type=float, default=100.0)
     parser.add_argument("--sigma", type=float, default=1.0)
     parser.add_argument("--Ld", type=float, default=float("inf"))
@@ -238,6 +241,9 @@ def main():
         gamma=args.gamma,
         trap_r_star=args.trap_r_star,
         trap_sharpness=args.trap_sharpness,
+        sponge_rate=args.sponge_rate,
+        sponge_r_start=args.sponge_r_start,
+        sponge_sharpness=args.sponge_sharpness,
         Ld=args.Ld,
         dt=args.dt,
         t_final=args.t_final,

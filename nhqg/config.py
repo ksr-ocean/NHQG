@@ -25,6 +25,9 @@ class NHQGConfig:
                               # activates the trapped background PV eta(x,y)
     trap_r_star: float | None = None  # Trap radius in code units; None -> 0.45*(L/2)
     trap_sharpness: float = 20.0      # Trap tanh sharpness A_d (SYI22 used |A_d| = 20)
+    sponge_rate: float = 0.0          # Rayleigh sponge max damping rate sigma_max; 0 disables
+    sponge_r_start: float | None = None  # sponge ramp center radius; None -> 1.18*r_star (requires gamma != 0)
+    sponge_sharpness: float = 20.0    # sponge tanh sharpness A_s
     Ld: float = float('inf')  # Deformation radius (inf = barotropic limit)
     L: float = 20.0           # Horizontal domain size (in units of Lc)
     thermal_closure: str = "fixed_conduction"  # or "evolve_mean"

@@ -120,6 +120,17 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       fits vs L_γ; gate = synthetic 19-vortex lattice with exact R/spacing
       (`tests/test_analyze_polar_p0.py`). Live mid-run smoke at t=95 sane
       (γ=0.02: U=0.705, 356 vortices, not yet organized).
+      **P0c COMPLETE (2026-07-24): all 3 legs clean to t=400.** Decay left
+      U_late≈0.093 ⇒ realized L_γ = {4.2, 2.7, 1.7}, r*/L_γ = {6, 10, 16}.
+      Morphology transition in the CIL24 direction: γ=1.25e-3 = mixed-sign
+      vortex gas (~40–60 vortices, still coarsening t=200→400);
+      γ=5e-3 = ~11 vortices, central cyclone + edge ring; γ=2e-2 = zonated
+      bands + central pair. NO lattice yet. Analyzer slopes (R=0.22,
+      spacing=−0.29, `analysis/polar_p0c/`) NOT meaningful as the M1 gate:
+      high-γ leg zonal (detector counts filaments), low-γ leg unconverged —
+      γ-drift segregation estimate ~1200 t.u. vs 400 run. M1 gate ⇒ extend
+      low-γ leg to t≈1500 **with the new sponge** (GPU7 currently user-occupied;
+      parked).
 
 ## M2 — Mixed BCs: Dirichlet bottom / Neumann-w top [independent of M1]
 
@@ -210,6 +221,19 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       in the P2 log). Edge-wave check: γ~6e-4 ⇒ ω_edge ≈ 0.2 → ars222 safe.
       ~23 h (pilot) + ~43 h (P2). γ=0 movie:
       `analysis/m4_pilot_opentop_3x3.mp4` (regenerate after t=100).
+      **PILOT DIED at t=97.25 (2026-07-24, NON-FINITE abort; handover
+      correctly did not fire).** Post-mortem: NOT physics — with no trap/drag
+      the condensate grew unchecked (U_bt 21→120 over t=40–97, no plateau);
+      max_speed 664→3320→NaN in 0.15 t.u. = ARS222 weak imaginary-axis
+      amplification on ADVECTIVE frequencies once max_speed·k_max·dt ≈ 0.22
+      (same family as the trap-edge instability; physical growth ≤8.6/t.u.
+      can't do this). Last good checkpoint t=96. Late-pilot Nu_d
+      fluctuated 36–57 (open-top Ra=100 reaches the Miquel both-Dirichlet
+      range once the condensate matures). Operational rule recorded: keep
+      max_speed·k_max·dt ≲ 0.1 for ars222 (k_max = √2·(Nx/3)·k0 = 6.54 here).
+      KEY REFRAME (user, 2026-07-24): the t=10–30 U_bt plateau ≈ 15–16 IS
+      the pre-condensate quasi-equilibrium — calibrate there and start the
+      trap run from t=30 (`checkpoint_00600000.npz`), not t=96/100.
 - [ ] dt stability scan at L=48 Lc (start 5e-5; CFL vs dx=0.45 units).
 - [x] Diagnostics cadence + non-finite abort: built into `scripts/run_polar.py`
       (2026-07-22; aborts with exit 2 + emergency checkpoint; structural-NaN
@@ -225,6 +249,25 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
 - [ ] γ-calibration pilot: γ=0 spin-up at L=48 Lc, measure barotropic U_rms,
       set γ for L_γ ≈ 5–7 Lc.
 - [ ] P1: γ=0 convective control (trap must not disturb condensate).
+- [~] **P2 AMENDED DESIGN (2026-07-24, user-approved) — in flight**:
+      restart from pilot t=30 (plateau state, small emergent vortices),
+      γ=2.2e-3 from plateau U_bt=15.5 targeting **L_γ = 4 Lc** (down from
+      plan's 6 Lc: P0c showed cap capacity r*/L_γ governs the end state),
+      **aggressive trap r\* = 0.8·(L/2) = 92.5 = 19.2 Lc** (vs default
+      0.45 ⇒ 10.8 Lc) enabled by a **new SYI22-style Rayleigh sponge**
+      (σ_max=50, r_s=104, A_s=30, damping q/w/θ — quiescent absorber
+      annulus, no periodic-image contamination). Sponge-geometry lesson:
+      the ramp must SATURATE before the periodic face or the seam
+      derivative-kink trips the 2/3-band guard (first cut r_s=1.18·r*,
+      A_s=20 left σ(face)=46 still rising → 2.6e-8 out-band; final r_s=104,
+      A_s=30 → 9.2e-12, σ(r*)=0.06, σ(face)=49.94). r*/L_γ = 4.8 ≈
+      SYI22 crystal point with hierarchy λ_f/L_γ = 0.25. dt=5e-5 safe again
+      from t=30 (advective ω·dt=0.049; edge-wave ~4e-3). ~2.2 days GPU6,
+      t=30→250. Caveat recorded: Θ̄ is a domain mean — with ~half the area
+      sponged, Nu becomes a cap diagnostic with an area factor; shell
+      budgets don't include the sponge sink (appears as residual).
+      Sponge implementation: config/grid/spectral/solver + run_polar flags
+      + tests/test_sponge.py (codex, CPU-gated; lead runs GPU smoke).
 - [ ] P2: γ>0, Ld=∞ — convectively forced crystal (first new result).
 - [ ] P3: finite Ld.
 - [ ] P4: (γ, Ld) sweep — one run per GPU (no sharding), 6/7.
