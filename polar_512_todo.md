@@ -242,6 +242,9 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       lead-written gates): `nhqg/polar_diagnostics.py` — azimuthal E(m),
       vortex tracker (periodic NMS + subpixel), radial profiles, trap mask.
 - [ ] Vertical-tail monitor (q Chebyshev tail fraction) in run diagnostics.
+      **PRIORITY RAISED 2026-07-25** — the tail is now the run-ending term
+      (see the M5/P2 blocker entry); a per-step `psi_vert_tail_frac` +
+      `max_speed_lowmode` pair would have flagged it 30 t.u. earlier.
 - [ ] **Gate**: stable 10-unit pilot, ghost-free, VRAM within budget.
 
 ## M5 — Physics campaign (per NHGQ_polar.tex §8)
@@ -268,9 +271,47 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       budgets don't include the sponge sink (appears as residual).
       Sponge implementation: config/grid/spectral/solver + run_polar flags
       + tests/test_sponge.py (codex, CPU-gated; lead runs GPU smoke).
+      **MID-RUN VERDICT at t=71 (2026-07-25, 12.8 h in, ~19 min/t.u.):
+      the trap+sponge design WORKS and the resolved flow is statistically
+      steady.** Versus the γ=0 pilot control at matched t=70:
+      KE_bt 92 vs 2305 (**25×**), max_speed 219 vs 356. Over t=31→70 the
+      barotropic sector is PINNED: U_bt 15.1–18.4 (design 15.5),
+      L_γ = 19.0–20.3 = 3.95–4.21 Lc (no drift), barotropic spectral peak
+      fluctuating 3.7–6.9 Lc about L_γ with no trend (arrest, not
+      condensation), cap/annulus KE contrast steady ≈ 9–10 (sponge holds),
+      q_rms 18.1±0.3, enstrophy 165±5, Nu_d ≈ 10, w_rms(cap) 30.5→32.8.
+      NOT organizing yet: cap zeta_bt skewness +0.05±0.05, no trend — no
+      cyclone/anticyclone segregation, no lattice. Morphology (png/zeta_bt):
+      fine filaments at t=32 → coarsened blobs/spiral bands at t=70 inside
+      a clean quiescent-corner disk.
+- [ ] **BLOCKER (found 2026-07-25 in P2): the vertical Chebyshev tail is
+      what will end every long polar run, not physics.** ψ KE fraction in
+      vertical modes n>48 (of 64) went **0.296 → 0.530 over t=31→70**, at
+      LOW horizontal k (q_rms/enstrophy flat, so it is a ψ-side pile-up).
+      Decisive test on the t=70 snapshot: max_speed(full)=218.9 but
+      max_speed(n≤32)=142.1 — **identical to t=31 (142.5)**. So ALL of the
+      apparent growth (KE_bc ×2.3, max_speed +35%, KE_tot e-fold 48 t.u.)
+      is the vertical grid-scale tail; the resolved flow has not changed in
+      40 t.u. This is CLAUDE.md §3b CAVEAT 2 (undamped vertical enstrophy
+      cascade — no vertical diffusion on q, per Miquel) grown from 27% to
+      53%. Consequence: max_speed → 300 (ω·dt = 0.098, the ars222 limit) at
+      **t ≈ 110–130**, death (ω·dt ≈ 0.22) at t ≈ 150–220 → P2 will not
+      reach t=250. Options: (i) high-n Chebyshev filter / vertical
+      hyperdiffusion on q,w,θ (`vertical_cutoff_n` exists in config but is
+      NOT wired to run_polar and covers only w,θ); (ii) **Nz=64→32 is
+      ~free** — n≤32 carries all resolved physics — and doubles throughput;
+      (iii) harvest P2 to death. Wall-clock context: 19 min/t.u. at 512²
+      means SYI22-scale segregation (P0c suggested ~1200 t.u.) is weeks —
+      the vertical sink + throughput are now the campaign's critical path.
 - [ ] P2: γ>0, Ld=∞ — convectively forced crystal (first new result).
 - [ ] P3: finite Ld.
 - [ ] P4: (γ, Ld) sweep — one run per GPU (no sharding), 6/7.
+- [ ] DEFERRED (user, 2026-07-24): 1024²×64 convective run (L=96 Lc,
+      r*/L_γ ~ 9–10). Fits ONE GPU memory-wise (~40–80 GB est. peak);
+      cost ~2 h/t.u. single-GPU (dt≈2.5e-5 for ars222 margin at k_max
+      ×2) → weeks. Revisit only if 512² P2 shows organization, ideally
+      after the M3 throughput fix. Barotropic 1024² decay legs are tests,
+      not campaign runs (user).
 
 ## Done
 

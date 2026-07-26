@@ -1,0 +1,22 @@
+# NHQG runtime dependencies.
+#
+# Versions are the ones the 151-test suite passes against as of 2026-07-26
+# (Python 3.13.9). JAX is deliberately NOT pinned to a CUDA wheel here --
+# install the accelerator build for the target cluster afterwards:
+#
+#     pip install -r requirements.txt
+#     pip install --upgrade "jax[cuda12]"
+#
+# JAX requires numpy >= 2.0; with numpy 1.x, jnp.zeros inside jit fails.
+# Production runs require JAX_ENABLE_X64=1 -- float64 is not optional here.
+
+jax>=0.10.0
+numpy>=2.3.0
+netCDF4>=1.7.0
+xarray>=2025.10.0
+Pillow>=12.0.0
+matplotlib>=3.10.0
+pytest>=8.0.0
+
+# Optional: parallel frame rendering in scripts/render_snapshot_panels.py --ray
+# ray>=2.9.0

@@ -7,6 +7,11 @@ fd_vertical_benchmark/output*/
 # Logs (run logs and LaTeX logs)
 *.log
 
+# Rendered frame stacks and movies (large, regenerable from snapshots via
+# scripts/render_snapshot_panels.py — keep them out of the GitHub mirror)
+analysis/frames_*/
+*.mp4
+
 # LaTeX build artifacts
 *.aux
 *.out
@@ -24,3 +29,15 @@ __pycache__/
 # Editor/OS noise
 *.swp
 .DS_Store
+
+# Archaic / superseded — kept on disk and in the data archive, out of the
+# GitHub mirror. all.py is an April dump of the whole nhqg/ package;
+# nhqg_contents.txt is an `ls -la` capture; restart* are agent session-resume
+# notes; dinosaur_spike/ is the unrelated May-2026 NeuralGCM feasibility spike.
+all.py
+nhqg_contents.txt
+restart
+restart_cc
+restart_codex
+dinosaur_spike/
+to_delete/

@@ -28,6 +28,30 @@ def _parse_args():
         help="Force theta to use symmetric limits too. w and zeta are always symmetric.",
     )
     parser.add_argument(
+        "--w-limits",
+        type=float,
+        nargs=2,
+        default=None,
+        help="Optional fixed [vmin vmax] for w; otherwise infer globally. "
+             "Pass the same values across runs to make two movies comparable.",
+    )
+    parser.add_argument(
+        "--zeta-limits",
+        type=float,
+        nargs=2,
+        default=None,
+        help="Optional fixed [vmin vmax] for zeta; otherwise infer globally.",
+    )
+    parser.add_argument("--t-min", type=float, default=None, help="Skip snapshots with t < t_min")
+    parser.add_argument("--t-max", type=float, default=None, help="Skip snapshots with t > t_max")
+    parser.add_argument(
+        "--time-font-size",
+        type=int,
+        default=None,
+        help="Draw the t= label with a TrueType font at this pixel size (default: small bitmap font). "
+             "Use when two runs cover different time ranges and the label carries the comparison.",
+    )
+    parser.add_argument(
         "--ray",
         action="store_true",
         help="Render frames in parallel with Ray.",
@@ -41,8 +65,20 @@ def _parse_args():
     return parser.parse_args()
 
 
-def _snapshot_files(input_dir: Path, stride: int) -> list[Path]:
+def _snapshot_files(input_dir: Path, stride: int,
+                    t_min: float | None = None, t_max: float | None = None) -> list[Path]:
     files = sorted(input_dir.glob("snapshot_*.nc"))
+    if t_min is not None or t_max is not None:
+        kept = []
+        for path in files:
+            with netCDF4.Dataset(path) as ds:
+                t = float(ds.time)
+            if t_min is not None and t < t_min:
+                continue
+            if t_max is not None and t > t_max:
+                continue
+            kept.append(path)
+        files = kept
     if stride > 1:
         files = files[::stride]
     if not files:
@@ -115,20 +151,27 @@ def _resize_tile(rgb: np.ndarray, size: int) -> Image.Image:
 
 def _compute_limits(files: list[Path], depth_idx: list[int],
                     theta_limits: tuple[float, float] | None,
-                    symmetric_theta: bool) -> dict[str, tuple[float, float]]:
+                    symmetric_theta: bool,
+                    w_limits: tuple[float, float] | None = None,
+                    zeta_limits: tuple[float, float] | None = None,
+                    ) -> dict[str, tuple[float, float]]:
     mins = {"theta": np.inf}
     maxs = {"theta": -np.inf, "w": 0.0, "zeta": 0.0}
 
-    for path in files:
-        _, fields = _load_slices(path, depth_idx)
-        for name in ("w", "zeta"):
-            maxs[name] = max(maxs[name], float(np.max(np.abs(fields[name]))))
-        mins["theta"] = min(mins["theta"], float(np.min(fields["theta"])))
-        maxs["theta"] = max(maxs["theta"], float(np.max(fields["theta"])))
+    need_scan = (theta_limits is None) or (w_limits is None) or (zeta_limits is None)
+    if need_scan:
+        for path in files:
+            _, fields = _load_slices(path, depth_idx)
+            for name in ("w", "zeta"):
+                maxs[name] = max(maxs[name], float(np.max(np.abs(fields[name]))))
+            mins["theta"] = min(mins["theta"], float(np.min(fields["theta"])))
+            maxs["theta"] = max(maxs["theta"], float(np.max(fields["theta"])))
 
     limits = {
-        "w": (-max(maxs["w"], 1e-12), max(maxs["w"], 1e-12)),
-        "zeta": (-max(maxs["zeta"], 1e-12), max(maxs["zeta"], 1e-12)),
+        "w": (float(w_limits[0]), float(w_limits[1])) if w_limits is not None
+             else (-max(maxs["w"], 1e-12), max(maxs["w"], 1e-12)),
+        "zeta": (float(zeta_limits[0]), float(zeta_limits[1])) if zeta_limits is not None
+                else (-max(maxs["zeta"], 1e-12), max(maxs["zeta"], 1e-12)),
     }
     if theta_limits is not None:
         limits["theta"] = (float(theta_limits[0]), float(theta_limits[1]))
@@ -144,8 +187,27 @@ def _compute_limits(files: list[Path], depth_idx: list[int],
     return limits
 
 
+_TTF_CANDIDATES = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+)
+
+
+def _time_font(size: int | None):
+    """TrueType font for the t= label, or None to fall back to the bitmap default."""
+    if not size:
+        return None
+    for candidate in _TTF_CANDIDATES:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    return None
+
+
 def _render_frame(path: Path, out_dir: Path, z: np.ndarray,
-                  depth_idx: list[int], limits: dict[str, tuple[float, float]]):
+                  depth_idx: list[int], limits: dict[str, tuple[float, float]],
+                  time_font_size: int | None = None):
     t, fields = _load_slices(path, depth_idx)
     row_specs = [("w", "bwr"), ("theta", "jet"), ("zeta", "bwr")]
     tile_size = 240
@@ -160,7 +222,8 @@ def _render_frame(path: Path, out_dir: Path, z: np.ndarray,
     draw = ImageDraw.Draw(canvas)
     font = ImageFont.load_default()
 
-    draw.text((12, 12), f"t={t:.3f}", fill=(0, 0, 0), font=font)
+    tfont = _time_font(time_font_size)
+    draw.text((12, 8), f"t={t:.3f}", fill=(0, 0, 0), font=tfont if tfont is not None else font)
     for col, idx in enumerate(depth_idx):
         x = left_pad + col * (tile_size + gap) + 82
         draw.text((x, 12), f"z={z[idx]:.3f}", fill=(0, 0, 0), font=font)
@@ -186,13 +249,15 @@ def _render_frame(path: Path, out_dir: Path, z: np.ndarray,
 
 
 def _render_serial(files: list[Path], out_dir: Path, z: np.ndarray,
-                   depth_idx: list[int], limits: dict[str, tuple[float, float]]):
+                   depth_idx: list[int], limits: dict[str, tuple[float, float]],
+                   time_font_size: int | None = None):
     for path in files:
-        _render_frame(path, out_dir, z, depth_idx, limits)
+        _render_frame(path, out_dir, z, depth_idx, limits, time_font_size)
 
 
 def _render_with_ray(files: list[Path], out_dir: Path, z: np.ndarray,
-                     depth_idx: list[int], limits: dict[str, tuple[float, float]], workers: int):
+                     depth_idx: list[int], limits: dict[str, tuple[float, float]], workers: int,
+                     time_font_size: int | None = None):
     import ray
 
     ray.init(
@@ -209,7 +274,8 @@ def _render_with_ray(files: list[Path], out_dir: Path, z: np.ndarray,
 
     @ray.remote
     def _render_remote(path_str: str, out_dir_str: str, z_arr, depth_idx_local, limits_local):
-        _render_frame(Path(path_str), Path(out_dir_str), z_arr, depth_idx_local, limits_local)
+        _render_frame(Path(path_str), Path(out_dir_str), z_arr, depth_idx_local, limits_local,
+                      time_font_size)
         return path_str
 
     futures = [
@@ -230,7 +296,7 @@ def main():
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir) if args.output_dir else input_dir / "panels_fixed"
 
-    files = _snapshot_files(input_dir, args.stride)
+    files = _snapshot_files(input_dir, args.stride, args.t_min, args.t_max)
     with netCDF4.Dataset(files[0]) as ds:
         z = np.asarray(ds.variables["z"][:], dtype=np.float64)
     depth_idx = _depth_indices(z, args.depths)
@@ -239,6 +305,8 @@ def main():
         depth_idx,
         tuple(args.theta_limits) if args.theta_limits is not None else None,
         args.symmetric_limits,
+        tuple(args.w_limits) if args.w_limits is not None else None,
+        tuple(args.zeta_limits) if args.zeta_limits is not None else None,
     )
 
     print(
@@ -250,9 +318,9 @@ def main():
     )
 
     if args.ray:
-        _render_with_ray(files, output_dir, z, depth_idx, limits, args.workers)
+        _render_with_ray(files, output_dir, z, depth_idx, limits, args.workers, args.time_font_size)
     else:
-        _render_serial(files, output_dir, z, depth_idx, limits)
+        _render_serial(files, output_dir, z, depth_idx, limits, args.time_font_size)
 
     print(f"saved fixed-range panels to {output_dir}", flush=True)
 

@@ -3,7 +3,9 @@
 
 import argparse
 import csv
+import datetime
 import math
+import shlex
 import time
 from pathlib import Path
 
@@ -228,6 +230,44 @@ def _write_diagnostics_row(path, step, t, diag):
         writer.writerow([step, t, *(diag[key] for key in keys)])
 
 
+def _write_run_config(output_dir: Path, args, cfg) -> None:
+    """Persist the exact invocation and resolved config beside the outputs.
+
+    Checkpoints store state only. Without this file a restart depends entirely
+    on the caller reproducing the flag string from memory, and the driver's
+    silent defaults (`legacy`, `32_rule`, `jacobian`, `float32`) match no
+    production run -- so a wrong restart is silent, not an error.
+    """
+    import dataclasses
+    import json
+    import socket
+    import sys
+
+    record = {
+        "argv": sys.argv,
+        "command": " ".join(shlex.quote(a) for a in [sys.executable, *sys.argv]),
+        "args": {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()},
+        "config": {
+            f.name: (lambda v: str(v) if not isinstance(v, (int, float, str, bool, type(None))) else v)(
+                getattr(cfg, f.name)
+            )
+            for f in dataclasses.fields(cfg)
+        },
+        "host": socket.gethostname(),
+        "python": sys.version.split()[0],
+        "jax": jax.__version__,
+        "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    }
+    path = output_dir / "run_config.json"
+    # Never clobber the record of an earlier leg of a chained run.
+    if path.exists():
+        n = 1
+        while (alt := output_dir / f"run_config.{n}.json").exists():
+            n += 1
+        path = alt
+    path.write_text(json.dumps(record, indent=2, default=str) + "\n")
+
+
 def main():
     args = _parse_args()
     L = args.L_over_Lc * 2.0 * math.pi / K_C
@@ -266,6 +306,7 @@ def main():
     )
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    _write_run_config(output_dir, args, cfg)
     grid = make_grid(cfg)
 
     if args.restart_checkpoint is not None:
