@@ -18,21 +18,56 @@ This document is the checklist for standing the campaign back up elsewhere.
 
 The archive is the long pole. Everything else is minutes.
 
-## 2. Target cluster
+## 2. Target cluster — SDSC Expanse
 
-The original plan named **PSC Bridges-2** (H100-80GB). Note that the only
-cluster configured in `~/.ssh/config` on the old host was **SDSC Expanse**
-(`login.expanse.sdsc.edu`, V100-32GB) — confirm which allocation is actually
-live before committing.
+**The migration went to Expanse** (account `cla119`, user `kaushiks`), not
+Bridges-2. Layout on the destination:
 
-Either works for `512² × 64`:
+```
+~/projects  ->  /expanse/lustre/projects/cla119/kaushiks     (symlink)
+  NHQG_runs_archive_2026-07/    the archive — 425 GB, this is the data
+  NHQG/                         STALE April copy, 374 GB — see below
+```
 
-| | H100-80GB (Bridges-2) | V100-32GB (Expanse) |
-| --- | --- | --- |
-| FP64 peak | 34 TFLOP/s | 7.8 TFLOP/s |
-| memory | 80 GB HBM3, 3.35 TB/s | 32 GB HBM2, 0.9 TB/s |
-| estimated step cost vs the old H200 | 1.0–1.4× | ~4× |
-| fits `512²×64`? | comfortably | yes |
+Expanse GPU nodes are **V100-32GB**. For reference against the old host:
+
+| | H200 (old host) | V100-32GB (Expanse) | H100-80GB (Bridges-2) |
+| --- | --- | --- | --- |
+| FP64 peak | 34 TFLOP/s | 7.8 TFLOP/s | 34 TFLOP/s |
+| memory | 141 GB, 4.8 TB/s | 32 GB, 0.9 TB/s | 80 GB, 3.35 TB/s |
+| measured / estimated per t.u. | 19 min | ~75 min (est.) | ~19–27 min (est.) |
+| fits `512²×64`? | yes | yes | yes |
+
+At ~4× the old step cost, `512² × 64` on a V100 is roughly 75 min/t.u. — the
+`t = 158 → 400` continuation would be ~300 h of GPU time across chained jobs.
+Two consequences worth acting on before committing to that:
+
+- **`Nz 64 → 32` is close to free** (vertical modes `n ≤ 32` carry all the
+  resolved physics — see §5) and halves the cost.
+- If a Bridges-2 allocation is available, it is ~4× faster for this workload.
+  Nothing in the harness is Expanse-specific except the partition line in
+  `scripts/submit_access.slurm`.
+
+### The stale copy
+
+`~/projects/NHQG` is a 374 GB April checkout with its own `output/` holding 35
+of the 68 run directories (327 GB) — essentially the whole Chebyshev thread. It
+was used to **seed** the archive: those runs were hardlinked into the archive
+layout on Expanse before rsync, which cut the transfer from 425 GB to 129 GB.
+
+Because they are hardlinks, `~/projects/NHQG/output/` and the archive share
+inodes. **Once the archive is verified, the stale copy can be deleted without
+losing any data** — the archive keeps its own links. Verify first (§3), then:
+
+```bash
+# after verification only
+rm -rf ~/projects/NHQG        # frees ~47 GB (the non-shared remainder)
+git clone git@github.com:ksr-ocean/NHQG.git ~/projects/NHQG
+```
+
+**Memory is not the constraint.** The 109.7 GB that `nvidia-smi` reported for
+the P2 run was JAX's preallocation pool (0.75 × 143.8 GB), not the working set.
+Bottom-up estimate of the real peak at `512² × 64`, float64:
 
 **Memory is not the constraint.** The 109.7 GB that `nvidia-smi` reported for
 the P2 run was JAX's preallocation pool (0.75 × 143.8 GB), not the working set.
@@ -64,37 +99,47 @@ At the old host's 19 min/t.u., `t = 158 → 400` is ~77 h, so the campaign needs
 
 ## 3. Transferring the archive
 
-PSC has a dedicated data-transfer node; use it rather than the login node.
-Both clusters need interactive auth (password + Duo), so run this yourself:
+Done on 2026-07-26. Reproduce or resume with:
 
 ```bash
-# Bridges-2
-rsync -avhP --partial --append-verify \
-      /home/kucla/kaushiks/mixed/NHQG_runs_archive_2026-07/ \
-      <user>@data.bridges2.psc.edu:/ocean/projects/<grant>/<user>/NHQG_runs_archive_2026-07/
-
-# Expanse
-rsync -avhP --partial --append-verify \
-      /home/kucla/kaushiks/mixed/NHQG_runs_archive_2026-07/ \
-      kaushiks@login.expanse.sdsc.edu:/expanse/lustre/projects/<grant>/<user>/NHQG_runs_archive_2026-07/
+scripts/transfer_archive.sh kaushiks@login.expanse.sdsc.edu:~/projects/
 ```
 
-`--partial --append-verify` makes it resumable: re-run the same command after
-any interruption and it picks up mid-file. Check the destination quota first —
-425 GB is more than a default `$HOME`, so it must land on Ocean / Lustre, not
-`$HOME`.
+`--partial --append-verify` makes it resumable — re-run the identical command
+after any interruption and it picks up mid-file. Expanse needs interactive auth
+(Duo), so either open a session first (the `~/.ssh/config` entry keeps a
+`ControlPersist 72h` master socket, which non-interactive rsync then reuses) or
+run it in a login shell.
 
-Verify after transfer:
+The archive must land on Lustre, not `$HOME` — `~/projects` is a symlink to
+`/expanse/lustre/projects/cla119/kaushiks`, so the path above is already
+correct.
+
+### Seeding from an existing copy
+
+If the destination already holds some of the runs under their **original**
+`output/<name>` directory names, hardlink them into the archive layout first —
+rsync then skips them entirely. That is what cut this transfer from 425 GB to
+129 GB. Login nodes often have an old Python (Expanse: 3.6.8), so the seeding is
+plain shell:
 
 ```bash
-# on the destination
-find NHQG_runs_archive_2026-07 -type f | wc -l    # expect 9776
-du -sb NHQG_runs_archive_2026-07                  # expect ~456 GB apparent (425 GiB)
+# for each (source_dir, archive_path) row in MANIFEST.tsv:
+mkdir -p "$(dirname "$DST/$archive_path")"
+cp -al "$SRC/$source_dir" "$DST/$archive_path"
 ```
 
-`MANIFEST.tsv` carries per-run file counts and byte totals for a finer check.
+`cp -al` is a recursive hardlink copy: instant, zero extra disk.
 
-`scripts/transfer_archive.sh` wraps the above with the counts built in.
+### Verification
+
+```bash
+VERIFY_ONLY=1 scripts/transfer_archive.sh kaushiks@login.expanse.sdsc.edu:~/projects/
+```
+
+Expect **9,779 files** and **456,291,787,769 bytes** (425 GiB). `MANIFEST.tsv`
+carries per-run file counts and byte totals for a finer check. Only after this
+passes should the stale copy be removed (§2).
 
 ## 4. Environment
 
@@ -112,12 +157,20 @@ matplotlib 3.10.6
 
 (Note these supersede the versions quoted in `CLAUDE.md`, which are stale.)
 
+Expanse's login-node `python3` is **3.6.8** — far too old (the codebase uses
+`from __future__ import annotations`, f-strings and modern typing). Build an
+environment:
+
 ```bash
+module load anaconda3          # or cpu/gpu-stack equivalent
 conda create -n nhqg python=3.13
 conda activate nhqg
 pip install -r requirements.txt
 pip install --upgrade "jax[cuda12]"
 ```
+
+Note that `module` is not available in non-interactive `ssh host cmd` shells on
+Expanse; `source /etc/profile.d/modules.sh` first if you need it there.
 
 Always export, in every job script:
 

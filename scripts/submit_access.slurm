@@ -1,9 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=nhqg_p2
-#SBATCH --partition=GPU-shared          # Bridges-2; Expanse: gpu-shared
+#SBATCH --partition=gpu-shared          # Expanse; Bridges-2: GPU-shared
+#SBATCH --account=cla119                # Expanse allocation
 #SBATCH --gpus=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=90G
 #SBATCH --time=48:00:00
 #SBATCH --output=slurm-%x-%j.out
 #
@@ -23,7 +25,7 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------- settings --
-ARCHIVE=${ARCHIVE:?set ARCHIVE to the staged NHQG_runs_archive_2026-07 path}
+ARCHIVE=${ARCHIVE:-$HOME/projects/NHQG_runs_archive_2026-07}
 OUTDIR=${OUTDIR:-output/polar_p2_continue}
 T_FINAL=${T_FINAL:-400}
 MODE=${MODE:-full}
@@ -34,6 +36,7 @@ LEG=${LEG:-1}
 SEED_CHECKPOINT=${SEED_CHECKPOINT:-$ARCHIVE/polar/p2_trap_sponge_512x64_t30_t158/checkpoint_03160000.npz}
 
 # ------------------------------------------------------------- environment --
+source /etc/profile.d/modules.sh 2>/dev/null || true
 module load anaconda3 2>/dev/null || true
 module load cuda 2>/dev/null || true
 source activate nhqg 2>/dev/null || conda activate nhqg

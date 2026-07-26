@@ -18,11 +18,25 @@ NHQG_runs_archive_2026-07/
 └── repo_artifacts/    gitignored repo outputs (PDFs, movies, frame stacks)
 ```
 
-**77 entries, 9,776 files, 425.0 GB.**
+**77 entries, 9,779 files, 425.0 GB** (456,291,787,769 bytes).
 
 The archive is built with hardlinks, so on the original host it occupied no
-extra disk — it and `output/` pointed at the same inodes. After transfer it is
-an ordinary tree.
+extra disk — it and `output/` pointed at the same inodes.
+
+## Where it lives
+
+**SDSC Expanse**, account `cla119`:
+
+```
+~/projects/NHQG_runs_archive_2026-07/
+   (= /expanse/lustre/projects/cla119/kaushiks/NHQG_runs_archive_2026-07/)
+```
+
+`~/projects/NHQG` on Expanse is a **stale April checkout**, not this
+repository. Its `output/` holds 35 of the 68 runs and was hardlinked into the
+archive to seed the transfer, so it shares inodes with the archive and can be
+deleted once the archive verifies — see `HANDOFF.md` §2. Clone this repository
+fresh; do not work in that directory.
 
 ## Reading it
 
