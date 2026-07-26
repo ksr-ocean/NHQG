@@ -5,6 +5,40 @@ update it as tasks land. Statuses: `[ ]` open, `[~]` in progress, `[x]` done,
 `[!]` blocked. "codex-able" = delegable per the §5 spec contract with CPU-only
 validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
 
+## M-1 — Migration off the original host (2026-07-26)
+
+GPU access ended (shared arrangement with R. Barkan's group). Files were not
+at risk; the project was staged for an ACCESS-CI restart.
+
+- [x] All 68 run directories staged into one documented archive,
+      `../NHQG_runs_archive_2026-07` (77 entries, 9,776 files, 425 GB), built
+      by `scripts/build_data_archive.py` with hardlinks — zero extra disk,
+      0.5 s. Carries `README.md` (a section per run, keyed to the repo docs),
+      `MANIFEST.tsv` (archive path ↔ original `output/` name, needed because
+      every older write-up cites the old names) and `RESTART.md` (the flag
+      string per run, labelled RECORDED vs RECONSTRUCTED).
+- [x] Repo made self-sufficient for a cold restart: `README.md`, `DATA.md`,
+      `HANDOFF.md`, `requirements.txt` with the versions the suite actually
+      passes against (Python 3.13.9 / JAX 0.10.0 / numpy 2.3.5 — CLAUDE.md's
+      3.12.2 / 0.9.1 / 2.0.2 were stale).
+- [x] `run_polar.py` now writes `run_config.json` (argv + resolved config +
+      host + JAX version) per output dir. Closes the "checkpoints carry no
+      config, defaults match no production run, wrong restart is silent" hole.
+- [x] `scripts/submit_access.slurm` — self-chaining SLURM job (48 h cap →
+      `--dependency=afterok` legs, restart from newest checkpoint, stops on
+      the non-finite exit code). `scripts/transfer_archive.sh` — resumable
+      rsync + verify mode.
+- [x] Repo hygiene: untracked `all.py`, `nhqg_contents.txt`, `restart*`,
+      `dinosaur_spike/`; gitignored frame stacks and movies. 452 objects,
+      22 MB — GitHub-safe. `main` fast-forwarded to `m0-hygiene`.
+- [ ] **User action: create the private GitHub repo, then push.** Remote is
+      preconfigured as `git@github.com:ksr-ocean/NHQG.git`; the key
+      `~/.ssh/id_ed25519_hpc` already authenticates as `ksr-ocean`.
+- [ ] **User action: rsync the archive** (needs interactive PSC/SDSC auth).
+      NOTE: only SDSC Expanse (V100-32GB) was configured in `~/.ssh/config`;
+      Bridges-2 (H100-80GB) has never been connected from here. Confirm which
+      allocation is live — see HANDOFF.md §2 for the throughput comparison.
+
 ## M0 — Hygiene prerequisites
 
 - [x] **P0.3 git** (2026-07-22): `.gitignore`, baseline commit `59d8aa3` on
@@ -284,6 +318,25 @@ validation; everything else is lead work. GPU gates: lead only, GPUs 6/7.
       cyclone/anticyclone segregation, no lattice. Morphology (png/zeta_bt):
       fine filaments at t=32 → coarsened blobs/spiral bands at t=70 inside
       a clean quiescent-corner disk.
+      **FINAL RECORD — P2 reached t=158.2 (2026-07-26), then SIGKILLed when
+      the host was withdrawn. Not a blowup: max_speed 260, KE_bt 101 at the
+      kill; last checkpoint `checkpoint_03160000.npz` (t=158.0) is clean and
+      restartable.** 128 t.u. of trap time ≈ 115 eddy turnovers. Metrics over
+      t=31→158 (every 6 t.u., cap-restricted r<r*):
+      (i) **arrest is durable, not transient** — U_bt 16.9→18.6 (range
+      15.7–20.1, +10% over 127 t.u.), L_γ 4.00→4.23 Lc, no drift;
+      (ii) **energy-containing scale saturates at ≈2 L_γ** — barotropic
+      L_peak 4.0 Lc at t=31 rising to 6.9–9.6 Lc by t≈90 and then fluctuating
+      there, i.e. it does NOT run on to the cap scale (24 Lc);
+      (iii) **no segregation** — cap skewness fluctuates ±0.1 about ≈+0.04
+      with no trend through t=158;
+      (iv) sponge holds — cap/annulus KE contrast 10.1→7.2–9.4.
+      Interpretation: trap+sponge deliver a statistically steady, cap-confined,
+      arrested turbulent state — the design worked — but 115 turnovers is not
+      enough for crystal formation, consistent with P0c's O(10³) t.u.
+      segregation estimate. **The campaign's open question is unchanged and now
+      purely a matter of integration length**, which is why the vertical sink
+      (blocker below) and throughput are the critical path.
 - [ ] **BLOCKER (found 2026-07-25 in P2): the vertical Chebyshev tail is
       what will end every long polar run, not physics.** ψ KE fraction in
       vertical modes n>48 (of 64) went **0.296 → 0.530 over t=31→70**, at
