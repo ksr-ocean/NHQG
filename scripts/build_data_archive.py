@@ -489,11 +489,9 @@ def time_range(src: Path) -> str:
                 return f"{float(rows[0]['t']):.2f}-{float(rows[-1]['t']):.2f}"
         except Exception:
             pass
-    steps = sorted(
-        int(m.group(1))
-        for p in src.glob("checkpoint_*.npz")
-        if (m := re.search(r"checkpoint_(\d+)\.npz", p.name))
-    )
+    matches = (re.search(r"checkpoint_(\d+)\.npz", p.name)
+               for p in src.glob("checkpoint_*.npz"))
+    steps = sorted(int(m.group(1)) for m in matches if m)
     if steps:
         return f"step {steps[0]}-{steps[-1]}"
     return "-"
