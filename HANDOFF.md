@@ -120,8 +120,10 @@ correct.
 If the destination already holds some of the runs under their **original**
 `output/<name>` directory names, hardlink them into the archive layout first —
 rsync then skips them entirely. That is what cut this transfer from 425 GB to
-129 GB. Login nodes often have an old Python (Expanse: 3.6.8), so the seeding is
-plain shell:
+129 GB. `scripts/build_data_archive.py` can do this on the destination
+(`--source <existing>/output --dest <archive>`), but it needs a real Python on
+`PATH` — see §4, non-interactive shells on Expanse get 3.6.8. The equivalent in
+plain shell, which always works:
 
 ```bash
 # for each (source_dir, archive_path) row in MANIFEST.tsv:
@@ -157,20 +159,31 @@ matplotlib 3.10.6
 
 (Note these supersede the versions quoted in `CLAUDE.md`, which are stale.)
 
-Expanse's login-node `python3` is **3.6.8** — far too old (the codebase uses
-`from __future__ import annotations`, f-strings and modern typing). Build an
-environment:
+On Expanse the account already has **`~/anaconda3/bin/python3` (3.12.2)**, which
+is fine for this codebase. The catch is that `~/anaconda3/bin` is **not on
+`PATH` in non-interactive shells** — neither `ssh expanse 'python3 ...'` nor
+`bash -lc python3` finds it; both resolve to the system `/usr/bin/python3`,
+which is **3.6.8** and too old (the codebase uses
+`from __future__ import annotations`, f-strings and modern typing). Batch
+scripts must therefore activate conda explicitly or use the absolute path:
 
 ```bash
-module load anaconda3          # or cpu/gpu-stack equivalent
+source "$HOME/anaconda3/etc/profile.d/conda.sh"
+conda activate nhqg            # or: $HOME/anaconda3/bin/python3 ...
+```
+
+To build a dedicated environment:
+
+```bash
+source "$HOME/anaconda3/etc/profile.d/conda.sh"
 conda create -n nhqg python=3.13
 conda activate nhqg
 pip install -r requirements.txt
 pip install --upgrade "jax[cuda12]"
 ```
 
-Note that `module` is not available in non-interactive `ssh host cmd` shells on
-Expanse; `source /etc/profile.d/modules.sh` first if you need it there.
+`module` is also unavailable in non-interactive shells; `source
+/etc/profile.d/modules.sh` first if a job needs it (e.g. for CUDA).
 
 Always export, in every job script:
 

@@ -36,10 +36,21 @@ LEG=${LEG:-1}
 SEED_CHECKPOINT=${SEED_CHECKPOINT:-$ARCHIVE/polar/p2_trap_sponge_512x64_t30_t158/checkpoint_03160000.npz}
 
 # ------------------------------------------------------------- environment --
+# NOTE: on Expanse neither `module` nor ~/anaconda3/bin is on PATH in a
+# non-interactive shell -- a bare `python3` there is the system 3.6.8, which
+# cannot even parse this codebase. Activate conda explicitly.
 source /etc/profile.d/modules.sh 2>/dev/null || true
-module load anaconda3 2>/dev/null || true
 module load cuda 2>/dev/null || true
-source activate nhqg 2>/dev/null || conda activate nhqg
+if [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
+  source "$HOME/anaconda3/etc/profile.d/conda.sh"
+fi
+conda activate "${CONDA_ENV:-nhqg}" 2>/dev/null || true
+
+PY_VER=$(python -c 'import sys;print("%d%02d"%sys.version_info[:2])' 2>/dev/null || echo 0)
+if [ "$PY_VER" -lt 308 ]; then
+  echo "FATAL: python is $(python -V 2>&1) -- need >= 3.8. Check CONDA_ENV." >&2
+  exit 1
+fi
 
 export JAX_ENABLE_X64=1
 export PYTHONPATH=.
