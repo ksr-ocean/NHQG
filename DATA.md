@@ -15,10 +15,11 @@ NHQG_runs_archive_2026-07/
 ├── chebyshev/         Miquel reproduction / Nusselt / cascade  ~40 entries, 300 GB
 ├── fd_vertical/       Route-B finite-difference benchmark    16 entries, 4.5 GB
 ├── exploratory/       spikes kept for provenance             2 entries, 0.8 GB
-└── repo_artifacts/    gitignored repo outputs (PDFs, movies, frame stacks)
+└── repo_artifacts/    gitignored repo outputs (PDFs, movies, frame stacks,
+                       and run_logs/ — the driver stdout logs, see below)
 ```
 
-**77 entries, 9,779 files, 425.0 GB** (456,291,787,769 bytes).
+**82 entries, 9,836 files, 425.0 GB** (456,294,434,499 bytes).
 
 The archive is built with hardlinks, so on the original host it occupied no
 extra disk — it and `output/` pointed at the same inodes.
@@ -64,6 +65,10 @@ plausible output rather than an error. `RESTART.md` records the flag string for
 each run family, labelled `RECORDED` (captured from the live process or a launch
 script) or `RECONSTRUCTED` (assembled from the log header and `CLAUDE.md` —
 check it against the run's own log before quoting a result).
+
+Those logs are in `repo_artifacts/run_logs/` (54 files, 1.7 MB) — the driver
+stdout of each run, named after the run. For a `RECONSTRUCTED` entry the log
+header is the only surviving record of what the run was actually launched with.
 
 Runs started after 2026-07-26 write `run_config.json` into their output
 directory — full `argv`, resolved `NHQGConfig`, host, JAX version. Every run in

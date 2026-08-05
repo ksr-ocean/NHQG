@@ -139,7 +139,7 @@ cp -al "$SRC/$source_dir" "$DST/$archive_path"
 VERIFY_ONLY=1 scripts/transfer_archive.sh kaushiks@login.expanse.sdsc.edu:~/projects/
 ```
 
-Expect **9,779 files** and **456,291,787,769 bytes** (425 GiB). `MANIFEST.tsv`
+Expect **9,836 files** and **456,294,434,499 bytes** (425 GiB). `MANIFEST.tsv`
 carries per-run file counts and byte totals for a finer check. Only after this
 passes should the stale copy be removed (§2).
 

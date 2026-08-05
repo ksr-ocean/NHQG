@@ -445,6 +445,24 @@ ARTIFACT_FILES: list[tuple[str, str, str]] = [
     ("analysis/movie_p2_trap_sponge_t31_t75_3x3.mp4",
      "repo_artifacts/movie_p2_trap_sponge_t31_t75_3x3.mp4",
      "P2 movie, t=31-75 (shared colour limits with the pilot movie)."),
+    ("spectral_diagnostics_reference.pdf",
+     "repo_artifacts/spectral_diagnostics_reference.pdf",
+     "Built spectral-diagnostics reference."),
+    ("discretely_balanced_mean_fluctuation_thermal_formulation.pdf",
+     "repo_artifacts/discretely_balanced_mean_fluctuation_thermal_formulation.pdf",
+     "Built discrete mean/fluctuation thermal-balance note."),
+    ("fd_compact_operators.pdf", "repo_artifacts/fd_compact_operators.pdf",
+     "Built FD compact-operator note."),
+]
+
+# Driver stdout logs. These matter more than their size suggests: a checkpoint
+# stores no configuration, so for every run whose RESTART.md entry is
+# RECONSTRUCTED the log header is the only surviving record of the checkpoint,
+# output directory and flag string it was launched with. LaTeX build logs (any
+# `foo.log` next to a `foo.tex`) are excluded as noise.
+ARTIFACT_LOG_GLOBS: list[tuple[str, str]] = [
+    ("*.log", "Chebyshev-era runs, launched from the repo root."),
+    ("output/*.log", "Polar-campaign runs, launched into output/."),
 ]
 
 
@@ -564,6 +582,28 @@ def main() -> int:
         rows.append((rel_dst, src_name, 1, nb, "-", desc))
         total_files += 1
         total_bytes += nb
+
+    for pattern, desc in ARTIFACT_LOG_GLOBS:
+        logs = sorted(p for p in REPO.glob(pattern)
+                      if p.is_file() and not p.with_suffix(".tex").exists())
+        nf = nb = 0
+        for src in logs:
+            d = dest / "repo_artifacts/run_logs" / src.name
+            nb += src.stat().st_size
+            nf += 1
+            if not args.dry_run:
+                d.parent.mkdir(parents=True, exist_ok=True)
+                if not d.exists():
+                    try:
+                        os.link(src, d)
+                    except OSError:
+                        shutil.copy2(src, d)
+        if nf:
+            rows.append(("repo_artifacts/run_logs", pattern, nf, nb, "-", desc))
+            total_files += nf
+            total_bytes += nb
+            print(f"  {'repo_artifacts/run_logs (' + pattern + ')':<62s} "
+                  f"{nf:6d} files  {human(nb):>9s}", flush=True)
 
     unclassified = sorted(
         p.name for p in source.iterdir()
